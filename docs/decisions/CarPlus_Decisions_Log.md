@@ -420,3 +420,90 @@ mencionado en D-002, agregar también la corrección de §14.10 a la lista de
 secciones del Technical Spec a actualizar.
 
 ---
+
+## D-009 — Fase 5b (RAG técnico): campo `referencedChunkIds` en `RAGRetrievalLog`
+
+**Fecha:** 2026-07-24
+**Estado:** Resuelto — vigente para el MVP
+
+**Contexto:** Al planificar la Fase 5b se leyó directamente el PRD v3.2
+(capítulo "Actualización Oficial — PRD v3.1", punto 5 — único párrafo
+sustantivo sobre RAG) y la Fase 10 completa (§80-94, Base de Conocimiento)
+para no confundir ambas: RAG es contexto efímero recuperado en tiempo de
+consulta, la Base de Conocimiento es aprendizaje persistente y está
+confirmada fuera del MVP (Technical Spec §8). El detalle de implementación
+de RAG vive en el Technical Spec (§9.8, §10.7, §14.4/14.5/14.10). Esa
+lectura encontró una discrepancia interna del propio Technical Spec.
+
+Además, el pedido inicial de esta fase asumía que
+`AiConversationContext`/`referencedDocuments` ya existían desde la Fase
+5. No era así: `ai-provider.interface.ts` documentaba explícitamente que
+ambos quedaban pendientes para la Fase 5b — omisión deliberada de la
+Fase 5, no un olvido. Se corrigió antes de planificar, sin impacto en el
+diseño (los campos se agregan ahora, como estaba previsto).
+
+**Decisión:**
+
+1. **`RAGRetrievalLog` gana un segundo campo, `referencedChunkIds`.** El
+   §10.7 define el modelo con un único campo `chunk_ids` = "IDs de
+   `DocumentChunk` recuperados" (lo que se **ofreció** al modelo como
+   contexto). Pero el §14.10 dice que el nuevo campo de salida
+   `referencedDocuments` de la IA (los chunks que el modelo **citó**
+   realmente en `assistantMessage`) sirve "para poblar `RAGRetrievalLog`
+   con la relación real de uso (no solo de recuperación)" — dos señales
+   distintas (ofrecido vs. citado) que el modelo de datos tal como está
+   solo puede guardar una. Mismo criterio que D-008 con
+   `Message.isSafetyStop`: se agrega `referencedChunkIds` (JSON,
+   nullable) en vez de perder la señal o forzarla dentro de `chunkIds`.
+2. Con el corpus vacío de esta fase (sin documentos reales cargados
+   todavía), ambos campos quedan casi siempre `[]`/`null` en la práctica
+   — la corrección es sobre el esquema, no sobre el comportamiento
+   observable hoy. Queda listo para cuando haya documentos reales.
+
+**Consecuencias:** Ver `backend/prisma/schema.prisma`
+(`RagRetrievalLog`), `backend/src/rag/` (`DocumentRetrievalService`,
+`DocumentIngestionService`) y `backend/src/messages/messages.service.ts`
+(persiste ambos campos dentro de la misma transacción atómica del turno,
+mismo patrón de D-008).
+
+---
+
+## D-010 — Nombre del producto: "Carrum" reemplaza a "CarPlus"
+
+**Fecha:** 2026-07-24
+**Estado:** Resuelto — decisión de producto; ejecución diferida, no
+bloquea ninguna fase actual
+
+**Contexto:** El usuario elige el nombre definitivo del producto:
+**Carrum** (del latín, raíz de "carro"/"car"), en reemplazo de "CarPlus"
+(nombre de trabajo usado hasta ahora en todo el código, la documentación
+y el repositorio).
+
+**Decisión:**
+
+1. El nombre del producto es **Carrum**. "CarPlus" queda como nombre de
+   trabajo histórico, documentado acá para trazabilidad, no como el
+   nombre vigente.
+2. Es una decisión de producto/branding, no de arquitectura — **no
+   requiere ningún cambio de código, esquema, ni documento ahora mismo**.
+3. El renombrado (repositorio `CarpL` en GitHub, `package.json` del
+   backend, nombre visible de la app móvil, toda la documentación en
+   `docs/` incl. PRD/Technical Spec/este mismo log, variables de entorno
+   o config que referencien el nombre) se ejecuta **en un solo paso**,
+   no de forma incremental fase a fase — evita dejar el proyecto en un
+   estado híbrido con unas partes diciendo "CarPlus" y otras "Carrum".
+4. Momento de ejecución: más cerca de la Fase 8 (Beta,
+   [[carplus_launch_strategy]]) o cuando el usuario lo decida
+   explícitamente — no antes. Ninguna fase actual (5b en adelante) debe
+   iniciar el renombrado por su cuenta.
+
+**Consecuencias:** No hay cambios inmediatos. Cuando se ejecute el
+renombrado: revisar `backend/package.json` (`name`), el repositorio
+GitHub (nombre `CarpL` y posiblemente la URL), todos los documentos en
+`docs/prd/`, `docs/technical-spec/` y este Decisions Log, cualquier
+string visible al usuario en la futura app móvil, y el nombre del
+proyecto Supabase si se considera parte del rebranding. Hasta entonces,
+seguir usando "CarPlus"/"CarpL" en código y commits sin mencionar
+"Carrum" para no crear inconsistencia a medio camino.
+
+---

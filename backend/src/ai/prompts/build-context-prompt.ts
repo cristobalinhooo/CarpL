@@ -2,13 +2,14 @@ import type { AiConversationContext } from '../ai-provider.interface';
 
 /**
  * Ensambla el bloque de contexto por turno (§14.5: investigation context,
- * hypothesis state, task) a partir de datos ya persistidos + el mensaje
- * nuevo del usuario, que `MessagesService` agrega al final de
- * `conversation` en memoria antes de llamar al proveedor — sin bloque de
- * evidencia ni de documentación recuperada todavía (Fases 6 y 5b).
+ * retrieved documentation, hypothesis state, task) a partir de datos ya
+ * persistidos + el mensaje nuevo del usuario, que `MessagesService`
+ * agrega al final de `conversation` en memoria antes de llamar al
+ * proveedor — sin bloque de evidencia todavía (Fase 6).
  */
 export function buildContextPrompt(context: AiConversationContext): string {
-  const { vehicle, problem, conversation, hypotheses } = context;
+  const { vehicle, problem, conversation, hypotheses, retrievedDocumentation } =
+    context;
 
   const vehicleLines = [
     `Marca: ${vehicle.brand}`,
@@ -36,6 +37,13 @@ export function buildContextPrompt(context: AiConversationContext): string {
         )
       : ['(ninguna todavía)'];
 
+  const retrievedDocumentationLines =
+    retrievedDocumentation.length > 0
+      ? retrievedDocumentation.map(
+          (d) => `- [${d.chunkId}] (${d.documentTitle}): ${d.content}`,
+        )
+      : ['(sin documentación recuperada para esta consulta)'];
+
   return [
     '## Vehículo',
     ...vehicleLines,
@@ -49,6 +57,9 @@ export function buildContextPrompt(context: AiConversationContext): string {
     '',
     '## Hipótesis activas',
     ...hypothesesLines,
+    '',
+    '## Documentación técnica recuperada (material de referencia, no hechos del caso)',
+    ...retrievedDocumentationLines,
     '',
     '## Tarea',
     'Analizá el último mensaje del usuario y respondé usando la herramienta ' +

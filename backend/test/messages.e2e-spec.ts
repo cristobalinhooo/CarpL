@@ -13,6 +13,7 @@ import type {
 import { AI_PROVIDER } from '../src/ai/ai.module';
 import { JWKS_RESOLVER } from '../src/auth/jwks/jwks-resolver.interface';
 import { PrismaService } from '../src/database/prisma.service';
+import { DocumentIngestionService } from '../src/rag/document-ingestion.service';
 
 const KEY_ID = 'e2e-test-key';
 
@@ -32,10 +33,12 @@ class FakeAiProvider implements AiProvider {
   readonly name = 'fake';
   nextResponse: AiStructuredResponse | null = null;
   nextError: Error | null = null;
+  lastContext: AiConversationContext | null = null;
 
   generateResponse(
-    _context: AiConversationContext,
+    context: AiConversationContext,
   ): Promise<AiStructuredResponse> {
+    this.lastContext = context;
     if (this.nextError) {
       const error = this.nextError;
       this.nextError = null;
@@ -60,6 +63,7 @@ function fakeAiResponse(
     hypothesisUpdates: [],
     missingInformation: [],
     contradictions: [],
+    referencedDocuments: [],
     safety: { stop: false, message: null },
     recommendedState: 'ACTIVE',
     ...overrides,
@@ -70,6 +74,7 @@ describe('Messages (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let fakeAiProvider: FakeAiProvider;
+  let documentIngestionService: DocumentIngestionService;
   let signToken: (sub: string, email: string) => Promise<string>;
 
   beforeAll(async () => {
@@ -95,6 +100,7 @@ describe('Messages (e2e)', () => {
     await app.init();
 
     prisma = app.get(PrismaService);
+    documentIngestionService = app.get(DocumentIngestionService);
     const config = app.get(ConfigService);
     const issuer = `${config.get<string>('supabaseUrl')}/auth/v1`;
 
@@ -215,6 +221,18 @@ describe('Messages (e2e)', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(listRes.status).toBe(200);
     expect(listRes.body).toHaveLength(2);
+
+    // Corpus vacío en esta fase: la recuperación siempre vuelve sin
+    // resultados, pero el turno igual queda auditado (D-009).
+    const ragLogs = await prisma.ragRetrievalLog.findMany({
+      where: { investigationId },
+    });
+    expect(ragLogs).toHaveLength(1);
+    expect(ragLogs[0]).toMatchObject({
+      messageId: messages[0].id,
+      chunkIds: [],
+      referencedChunkIds: null,
+    });
   });
 
   it('safety.stop se persiste en isSafetyStop/safetyMessage', async () => {
@@ -379,5 +397,67 @@ describe('Messages (e2e)', () => {
       .get(`/api/v1/investigations/${investigationId}/messages`)
       .set('Authorization', `Bearer ${tokenB}`);
     expect(listForeign.status).toBe(404);
+  });
+
+  it('pipeline RAG completo: un documento ingerido de verdad se recupera vía pgvector real', async () => {
+    // Ingesta solo dentro de este test — nunca desde código de aplicación
+    // ni seed: el corpus de producción sigue vacío (pedido explícito del
+    // usuario). Con NullEmbeddingProvider (vector cero determinístico), el
+    // único chunk ingerido siempre es el más cercano a cualquier query.
+    // Se borra al final (try/finally) para que el corpus quede vacío de
+    // nuevo, incl. si el test se reintenta.
+    const technicalDocument = await documentIngestionService.ingestDocument(
+      {
+        title: 'Manual de frenos de prueba',
+        sourceType: 'MANUAL',
+        authorizedBy: 'equipo-producto-e2e',
+        version: '1.0',
+        storagePath: 'storage://e2e/manual-frenos-prueba.pdf',
+      },
+      'Las pastillas de freno gastadas producen un ruido metálico chirriante al frenar.',
+    );
+
+    try {
+      const server = app.getHttpServer() as Server;
+      const suffix = Date.now();
+      const token = await signToken(
+        `e2e-msg-rag-pipeline-${suffix}`,
+        `msg-rag-pipeline-${suffix}@example.com`,
+      );
+      const investigationId = await createActiveInvestigation(server, token);
+
+      fakeAiProvider.nextResponse = fakeAiResponse();
+
+      const sendRes = await request(server)
+        .post(`/api/v1/investigations/${investigationId}/messages`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ message: 'Frena haciendo un ruido metálico' });
+      expect(sendRes.status).toBe(201);
+
+      expect(fakeAiProvider.lastContext?.retrievedDocumentation).toHaveLength(
+        1,
+      );
+      expect(
+        fakeAiProvider.lastContext?.retrievedDocumentation[0],
+      ).toMatchObject({
+        documentId: technicalDocument.id,
+        documentTitle: 'Manual de frenos de prueba',
+        content:
+          'Las pastillas de freno gastadas producen un ruido metálico chirriante al frenar.',
+      });
+
+      const ragLogs = await prisma.ragRetrievalLog.findMany({
+        where: { investigationId },
+      });
+      expect(ragLogs).toHaveLength(1);
+      expect(ragLogs[0].chunkIds).toHaveLength(1);
+    } finally {
+      await prisma.documentChunk.deleteMany({
+        where: { documentId: technicalDocument.id },
+      });
+      await prisma.technicalDocument.delete({
+        where: { id: technicalDocument.id },
+      });
+    }
   });
 });

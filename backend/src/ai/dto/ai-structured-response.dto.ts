@@ -83,6 +83,10 @@ export class AiStructuredResponseDto {
   @IsString({ each: true })
   contradictions!: string[];
 
+  @IsArray()
+  @IsString({ each: true })
+  referencedDocuments!: string[];
+
   @ValidateNested()
   @Type(() => AiSafetyDto)
   safety!: AiSafetyDto;

@@ -30,6 +30,16 @@
 // consultable, no solo como texto libre — sin funcionalidad nueva
 // alrededor todavía. `Hypothesis.evidenceRefs` queda siempre vacío: no
 // existe Evidence hasta la Fase 6.
+// Fase 5b (RAG técnico): tablas `technical_documents`, `document_chunks`
+// (§10.7) — `embedding` es `Unsupported("vector(1536)")` porque Prisma no
+// modela `vector` como tipo nativo; toda escritura/lectura de esa columna
+// pasa por SQL crudo parametrizado (tagged-template de Prisma, nunca
+// concatenación de strings). `rag_retrieval_logs` (§10.7, D-009) audita
+// cada recuperación: `chunk_ids` = lo ofrecido al modelo,
+// `referenced_chunk_ids` = lo que el modelo citó realmente según su
+// propia salida estructurada — dos señales distintas, ninguna se pierde.
+// Alcance mínimo: el pipeline de ingesta/recuperación es real, pero el
+// corpus queda vacío (sin documentos reales cargados todavía).
 // Las demás entidades (Evidence, Reports, ...) se añaden en sus fases
 // correspondientes del roadmap, no de una sola vez aquí.
 
@@ -210,6 +220,7 @@ model Investigation {
   messages            Message[]
   hypotheses          Hypothesis[]
   hypothesisRevisions HypothesisRevision[]
+  ragRetrievalLogs    RagRetrievalLog[]
 
   @@index([userId, createdAt], map: "idx_investigations_user_id_created_at")
   @@index([vehicleId, createdAt], map: "idx_investigations_vehicle_id_created_at")
@@ -258,6 +269,7 @@ model Message {
 
   investigation       Investigation        @relation(fields: [investigationId], references: [id])
   hypothesisRevisions HypothesisRevision[]
+  ragRetrievalLogs    RagRetrievalLog[]
 
   @@index([investigationId, createdAt], map: "idx_messages_investigation_id_created_at")
   @@index([investigationId, isSafetyStop], map: "idx_messages_investigation_id_safety_stop")
@@ -314,4 +326,89 @@ model HypothesisRevision {
   @@index([hypothesisId, createdAt], map: "idx_hypothesis_revision_hypothesis_id_created_at")
   @@index([investigationId, createdAt], map: "idx_hypothesis_revision_investigation_id_created_at")
   @@map("hypothesis_revisions")
+}
+
+enum TechnicalDocumentSourceType {
+  MANUAL
+  BULLETIN
+  MANUFACTURER_DOC
+  OTHER_AUTHORIZED
+}
+
+enum TechnicalDocumentStatus {
+  ACTIVE
+  DEPRECATED
+}
+
+/// Documentación técnica autorizada ingerida al corpus RAG (§10.7, §9.8).
+/// La ingesta es un proceso operado por el equipo del producto, sin
+/// endpoint público (§11.3). Corpus vacío en la Fase 5b: la
+/// infraestructura es real, pero no hay documentos reales cargados
+/// todavía.
+model TechnicalDocument {
+  id           String                      @id @default(uuid())
+  title        String
+  sourceType   TechnicalDocumentSourceType @map("source_type")
+  authorizedBy String                      @map("authorized_by")
+  version      String
+  status       TechnicalDocumentStatus     @default(ACTIVE)
+  /// Alcance opcional (marca/modelo/rango de años aplicable).
+  vehicleScope Json?                       @map("vehicle_scope")
+  storagePath  String                      @map("storage_path")
+  ingestedAt   DateTime                    @default(now()) @map("ingested_at")
+
+  chunks DocumentChunk[]
+
+  @@index([status], map: "idx_technical_documents_status")
+  @@index([sourceType], map: "idx_technical_documents_source_type")
+  @@map("technical_documents")
+}
+
+/// Fragmento indexado con embedding (§10.7). `embedding` es
+/// `Unsupported` porque Prisma no modela `vector` como tipo nativo —
+/// todo insert/lectura de esa columna específica pasa por SQL crudo
+/// (`$executeRaw`/`$queryRaw`, siempre con tagged-template parametrizado,
+/// nunca concatenación de strings); el resto de las columnas usa Prisma
+/// Client normal. Dimensión 1536 (tamaño común de embeddings) es un
+/// valor de referencia, trivialmente migrable mientras el corpus esté
+/// vacío, como ahora. Índice vectorial (`hnsw`) agregado a mano en la
+/// migración — Prisma no genera sintaxis de índices pgvector.
+model DocumentChunk {
+  id          String                      @id @default(uuid())
+  documentId  String                      @map("document_id")
+  /// Orden dentro del documento.
+  chunkIndex  Int                         @map("chunk_index")
+  contentText String                      @map("content_text")
+  embedding   Unsupported("vector(1536)")
+  /// Aproximado (`Math.ceil(length / 4)`), no un tokenizer real — solo
+  /// para control de tamaño de contexto.
+  tokenCount  Int                         @map("token_count")
+
+  document TechnicalDocument @relation(fields: [documentId], references: [id])
+
+  @@map("document_chunks")
+}
+
+/// Traza de auditoría de cada recuperación RAG por interacción (§10.7,
+/// §14.10) — exclusivamente de auditoría/explicabilidad, nunca de
+/// aprendizaje (no confundir con la Base de Conocimiento, fuera del MVP).
+/// `chunkIds`: fragmentos ofrecidos al modelo como contexto.
+/// `referencedChunkIds` (D-009, corrige una discrepancia entre §10.7 y
+/// §14.10): el subconjunto que el modelo efectivamente citó en
+/// `assistantMessage`, según su propia salida estructurada
+/// (`referencedDocuments`) — señal distinta, ambas se conservan.
+model RagRetrievalLog {
+  id                 String   @id @default(uuid())
+  investigationId    String   @map("investigation_id")
+  messageId          String?  @map("message_id")
+  chunkIds           Json     @map("chunk_ids")
+  referencedChunkIds Json?    @map("referenced_chunk_ids")
+  queryText          String   @map("query_text")
+  retrievedAt        DateTime @default(now()) @map("retrieved_at")
+
+  investigation Investigation @relation(fields: [investigationId], references: [id])
+  message       Message?      @relation(fields: [messageId], references: [id])
+
+  @@index([investigationId, retrievedAt], map: "idx_rag_retrieval_log_investigation_id_retrieved_at")
+  @@map("rag_retrieval_logs")
 }

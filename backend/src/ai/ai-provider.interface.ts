@@ -34,15 +34,26 @@ export interface AiHypothesisContext {
   reasoning: string;
 }
 
+/** Fragmento recuperado vía RAG (§9.8), con cita de su documento de
+ * origen — contexto temporal de esta interacción únicamente, nunca
+ * memorizado ni persistido como conocimiento permanente. */
+export interface AiRetrievedDocument {
+  chunkId: string;
+  documentId: string;
+  documentTitle: string;
+  content: string;
+}
+
 /**
- * Sin bloque de evidencia ni de documentación recuperada todavía — Evidence
- * es Fase 6, RAG es Fase 5b. Se agregan a este contrato cuando existan.
+ * Sin bloque de evidencia todavía — Evidence es Fase 6. Se agrega a este
+ * contrato cuando exista.
  */
 export interface AiConversationContext {
   vehicle: AiVehicleContext;
   problem: { title: string; description: string };
   conversation: AiConversationMessage[];
   hypotheses: AiHypothesisContext[];
+  retrievedDocumentation: AiRetrievedDocument[];
 }
 
 export interface AiHypothesisUpdate {
@@ -69,6 +80,10 @@ export interface AiStructuredResponse {
   hypothesisUpdates: AiHypothesisUpdate[];
   missingInformation: string[];
   contradictions: string[];
+  /** IDs de `DocumentChunk` efectivamente citados en `assistantMessage`
+   * (§14.10) — no confundir con los que solo se ofrecieron como contexto
+   * (ver `AiConversationContext.retrievedDocumentation`, D-009). */
+  referencedDocuments: string[];
   safety: { stop: boolean; message: string | null };
   recommendedState: AiRecommendedState;
 }

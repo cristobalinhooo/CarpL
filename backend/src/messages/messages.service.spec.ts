@@ -1,4 +1,5 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type {
   Hypothesis,
   Investigation,
@@ -11,6 +12,7 @@ import type {
   AiStructuredResponse,
 } from '../ai/ai-provider.interface';
 import type { InvestigationsService } from '../investigations/investigations.service';
+import type { DocumentRetrievalService } from '../rag/document-retrieval.service';
 import type { VehiclesService } from '../vehicles/vehicles.service';
 import { MessagesService } from './messages.service';
 
@@ -23,6 +25,7 @@ interface FakePrisma {
     create: jest.Mock;
   };
   hypothesisRevision: { create: jest.Mock };
+  ragRetrievalLog: { create: jest.Mock };
   $transaction: jest.Mock;
 }
 
@@ -114,6 +117,7 @@ function fakeAiResponse(
     hypothesisUpdates: [],
     missingInformation: [],
     contradictions: [],
+    referencedDocuments: [],
     safety: { stop: false, message: null },
     recommendedState: 'ACTIVE',
     ...overrides,
@@ -130,6 +134,7 @@ function createFakePrisma(): FakePrisma {
       create: jest.fn(),
     },
     hypothesisRevision: { create: jest.fn() },
+    ragRetrievalLog: { create: jest.fn() },
   } as unknown as FakePrisma;
 
   prisma.$transaction = jest.fn((callback: (tx: FakePrisma) => unknown) =>
@@ -147,6 +152,7 @@ describe('MessagesService', () => {
   };
   let vehiclesService: { findOneOwned: jest.Mock };
   let aiProvider: { generateResponse: jest.Mock };
+  let documentRetrievalService: { retrieveRelevantChunks: jest.Mock };
   let service: MessagesService;
 
   beforeEach(() => {
@@ -154,17 +160,20 @@ describe('MessagesService', () => {
     investigationsService = { findOneOwned: jest.fn(), transition: jest.fn() };
     vehiclesService = { findOneOwned: jest.fn() };
     aiProvider = { generateResponse: jest.fn() };
+    documentRetrievalService = { retrieveRelevantChunks: jest.fn() };
 
     investigationsService.findOneOwned.mockResolvedValue(fakeInvestigation());
     vehiclesService.findOneOwned.mockResolvedValue(fakeVehicle());
     prisma.message.findMany.mockResolvedValue([]);
     prisma.hypothesis.findMany.mockResolvedValue([]);
+    documentRetrievalService.retrieveRelevantChunks.mockResolvedValue([]);
 
     service = new MessagesService(
       prisma as unknown as PrismaService,
       investigationsService as unknown as InvestigationsService,
       vehiclesService as unknown as VehiclesService,
       aiProvider as unknown as AiProvider,
+      documentRetrievalService as unknown as DocumentRetrievalService,
     );
   });
 
@@ -403,6 +412,112 @@ describe('MessagesService', () => {
       });
 
       expect(investigationsService.transition).not.toHaveBeenCalled();
+    });
+
+    it('recupera documentación vía RAG con un query armado a partir de título/descripción/mensaje', async () => {
+      aiProvider.generateResponse.mockResolvedValue(fakeAiResponse());
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+
+      await service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+        message: 'Frena raro',
+      });
+
+      const investigation = fakeInvestigation();
+      expect(
+        documentRetrievalService.retrieveRelevantChunks,
+      ).toHaveBeenCalledWith(
+        `${investigation.title}. ${investigation.description}. Frena raro`,
+      );
+    });
+
+    it('pasa los fragmentos recuperados como retrievedDocumentation en el contexto de la IA', async () => {
+      documentRetrievalService.retrieveRelevantChunks.mockResolvedValue([
+        {
+          chunkId: 'chunk-1',
+          documentId: 'doc-1',
+          documentTitle: 'Manual de frenos',
+          content: 'Las pastillas de freno...',
+        },
+      ]);
+      aiProvider.generateResponse.mockResolvedValue(fakeAiResponse());
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+
+      await service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+        message: 'Frena raro',
+      });
+
+      expect(aiProvider.generateResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          retrievedDocumentation: [
+            {
+              chunkId: 'chunk-1',
+              documentId: 'doc-1',
+              documentTitle: 'Manual de frenos',
+              content: 'Las pastillas de freno...',
+            },
+          ],
+        }),
+      );
+    });
+
+    it('crea RagRetrievalLog dentro de la misma tx con chunkIds/referencedChunkIds/queryText/messageId', async () => {
+      documentRetrievalService.retrieveRelevantChunks.mockResolvedValue([
+        {
+          chunkId: 'chunk-1',
+          documentId: 'doc-1',
+          documentTitle: 'Manual de frenos',
+          content: 'Las pastillas de freno...',
+        },
+      ]);
+      aiProvider.generateResponse.mockResolvedValue(
+        fakeAiResponse({ referencedDocuments: ['chunk-1'] }),
+      );
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+
+      await service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+        message: 'Frena raro',
+      });
+
+      const investigation = fakeInvestigation();
+      expect(prisma.ragRetrievalLog.create).toHaveBeenCalledWith({
+        data: {
+          investigationId: INVESTIGATION_ID,
+          messageId: 'user-msg',
+          chunkIds: ['chunk-1'],
+          referencedChunkIds: ['chunk-1'],
+          queryText: `${investigation.title}. ${investigation.description}. Frena raro`,
+        },
+      });
+    });
+
+    it('usa Prisma.DbNull en referencedChunkIds cuando la IA no citó nada', async () => {
+      aiProvider.generateResponse.mockResolvedValue(
+        fakeAiResponse({ referencedDocuments: [] }),
+      );
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+
+      await service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+        message: 'Frena raro',
+      });
+
+      const investigation = fakeInvestigation();
+      expect(prisma.ragRetrievalLog.create).toHaveBeenCalledWith({
+        data: {
+          investigationId: INVESTIGATION_ID,
+          messageId: 'user-msg',
+          chunkIds: [],
+          referencedChunkIds: Prisma.DbNull,
+          queryText: `${investigation.title}. ${investigation.description}. Frena raro`,
+        },
+      });
     });
   });
 

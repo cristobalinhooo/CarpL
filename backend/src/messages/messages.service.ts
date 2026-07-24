@@ -1,5 +1,6 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
-import type { Hypothesis, Message, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { Hypothesis, Message } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { InvestigationsService } from '../investigations/investigations.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
@@ -10,6 +11,7 @@ import type {
   AiProvider,
 } from '../ai/ai-provider.interface';
 import { AI_PROVIDER } from '../ai/ai.module';
+import { DocumentRetrievalService } from '../rag/document-retrieval.service';
 import { CreateMessageDto } from './dto/create-message.dto';
 
 export interface SendMessageResult {
@@ -25,6 +27,7 @@ export class MessagesService {
     private readonly investigationsService: InvestigationsService,
     private readonly vehiclesService: VehiclesService,
     @Inject(AI_PROVIDER) private readonly aiProvider: AiProvider,
+    private readonly documentRetrievalService: DocumentRetrievalService,
   ) {}
 
   async findByInvestigation(
@@ -80,6 +83,16 @@ export class MessagesService {
       orderBy: { createdAt: 'asc' },
     });
 
+    // Construida a partir del contexto técnico y conversacional (§9.8) —
+    // siempre se intenta recuperar, en cada mensaje, sin heurística de
+    // "relevancia" (el PRD/Technical Spec no la definen; ver plan de la
+    // Fase 5b). Sobre el corpus vacío de esta fase, siempre vuelve [].
+    const retrievalQuery = `${investigation.title}. ${investigation.description}. ${dto.message}`;
+    const retrievedChunks =
+      await this.documentRetrievalService.retrieveRelevantChunks(
+        retrievalQuery,
+      );
+
     const context: AiConversationContext = {
       vehicle: {
         brand: vehicle.brand,
@@ -112,6 +125,12 @@ export class MessagesService {
         status: h.status,
         reasoning: h.reasoning,
       })),
+      retrievedDocumentation: retrievedChunks.map((c) => ({
+        chunkId: c.chunkId,
+        documentId: c.documentId,
+        documentTitle: c.documentTitle,
+        content: c.content,
+      })),
     };
 
     // Sin escrituras a la base de datos antes de este punto: si el
@@ -125,6 +144,22 @@ export class MessagesService {
           investigationId,
           sender: 'USER',
           message: dto.message,
+        },
+      });
+
+      // §10.7/§14.10 (D-009): `chunkIds` = lo ofrecido al modelo,
+      // `referencedChunkIds` = lo que citó realmente según su propia
+      // salida — señales distintas, ambas se conservan.
+      await tx.ragRetrievalLog.create({
+        data: {
+          investigationId,
+          messageId: userMessage.id,
+          chunkIds: retrievedChunks.map((c) => c.chunkId),
+          referencedChunkIds:
+            aiResponse.referencedDocuments.length > 0
+              ? aiResponse.referencedDocuments
+              : Prisma.DbNull,
+          queryText: retrievalQuery,
         },
       });
 

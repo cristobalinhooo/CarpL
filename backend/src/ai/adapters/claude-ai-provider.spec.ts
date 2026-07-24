@@ -14,6 +14,7 @@ function fakeContext(): AiConversationContext {
     problem: { title: 'Ruido al frenar', description: 'Ruido metálico' },
     conversation: [{ sender: 'USER', message: 'Frena raro' }],
     hypotheses: [],
+    retrievedDocumentation: [],
   };
 }
 
@@ -25,6 +26,7 @@ function validToolInput() {
     hypothesisUpdates: [],
     missingInformation: [],
     contradictions: [],
+    referencedDocuments: [],
     safety: { stop: false, message: null },
     recommendedState: 'ACTIVE',
   };
@@ -124,5 +126,53 @@ describe('ClaudeAiProvider', () => {
     await expect(
       provider.generateResponse(fakeContext()),
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('rechaza con ServiceUnavailableException si falta referencedDocuments', async () => {
+    const withoutReferencedDocuments: Record<string, unknown> = {
+      ...validToolInput(),
+    };
+    delete withoutReferencedDocuments.referencedDocuments;
+    client.messages.create.mockResolvedValue({
+      content: [
+        {
+          type: 'tool_use',
+          id: 't1',
+          name: 'submit_investigation_response',
+          input: withoutReferencedDocuments,
+        },
+      ],
+    });
+
+    await expect(
+      provider.generateResponse(fakeContext()),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('acepta y devuelve referencedDocuments citando chunks recuperados', async () => {
+    client.messages.create.mockResolvedValue({
+      content: [
+        {
+          type: 'tool_use',
+          id: 't1',
+          name: 'submit_investigation_response',
+          input: { ...validToolInput(), referencedDocuments: ['chunk-1'] },
+        },
+      ],
+    });
+
+    const result = await provider.generateResponse({
+      ...fakeContext(),
+      retrievedDocumentation: [
+        {
+          chunkId: 'chunk-1',
+          documentId: 'doc-1',
+          documentTitle: 'Manual de frenos',
+          content: 'Las pastillas de freno...',
+        },
+      ],
+    });
+
+    expect(result.referencedDocuments).toEqual(['chunk-1']);
   });
 });

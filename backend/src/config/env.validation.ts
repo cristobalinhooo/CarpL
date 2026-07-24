@@ -38,4 +38,10 @@ export const envValidationSchema = Joi.object({
   AI_MODEL: Joi.string().required(),
   AI_API_KEY_CLAUDE: Joi.string().required(),
   AI_TIMEOUT_MS: Joi.number().integer().positive().default(15000),
+
+  // Fase 5b — RAG técnico. Alcance mínimo: solo existe el adaptador nulo
+  // de embeddings, así que solo "null" es un valor válido por ahora —
+  // mismo criterio que VEHICLE_DATA_PROVIDER.
+  RAG_EMBEDDING_PROVIDER: Joi.string().valid('null').default('null'),
+  RAG_MAX_CHUNKS_PER_QUERY: Joi.number().integer().positive().default(5),
 });

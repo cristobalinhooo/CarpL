@@ -50,6 +50,7 @@ const RESPONSE_TOOL: Anthropic.Tool = {
       },
       missingInformation: { type: 'array', items: { type: 'string' } },
       contradictions: { type: 'array', items: { type: 'string' } },
+      referencedDocuments: { type: 'array', items: { type: 'string' } },
       safety: {
         type: 'object',
         properties: {
@@ -71,6 +72,7 @@ const RESPONSE_TOOL: Anthropic.Tool = {
       'hypothesisUpdates',
       'missingInformation',
       'contradictions',
+      'referencedDocuments',
       'safety',
       'recommendedState',
     ],
