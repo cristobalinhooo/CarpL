@@ -44,6 +44,12 @@ jobs:
       # la Fase 2 — ver docs/decisions/CarPlus_Decisions_Log.md D-004.
       SUPABASE_URL: https://placeholder.supabase.co
       SUPABASE_ANON_KEY: placeholder-anon-key
+      # Ídem para Claude/Anthropic desde la Fase 5 — los tests de messages/
+      # sobreescriben AI_PROVIDER con un adaptador falso determinístico
+      # (mismo patrón que JWKS_RESOLVER), CI nunca llama a Anthropic real.
+      AI_PROVIDER: claude
+      AI_MODEL: claude-sonnet-5
+      AI_API_KEY_CLAUDE: placeholder-anthropic-key
 
     steps:
       - uses: actions/checkout@v4

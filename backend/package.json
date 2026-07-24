@@ -29,6 +29,7 @@
     "@nestjs/platform-express": "^11.1.28",
     "@nestjs/terminus": "^11.1.1",
     "@prisma/client": "^6.19.3",
+    "@anthropic-ai/sdk": "^0.114.0",
     "@supabase/supabase-js": "^2.110.8",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",

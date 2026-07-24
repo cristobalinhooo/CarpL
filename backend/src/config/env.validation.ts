@@ -30,4 +30,12 @@ export const envValidationSchema = Joi.object({
   // agregar un proveedor real más adelante también agrega el valor
   // permitido acá, no antes.
   VEHICLE_DATA_PROVIDER: Joi.string().valid('null').default('null'),
+
+  // Fase 5 — AI Chat. Claude es el primer (y único, por ahora) proveedor
+  // real de AIProvider — a diferencia de VEHICLE_DATA_PROVIDER, acá no
+  // hay adaptador nulo: sin API key configurada, el backend no arranca.
+  AI_PROVIDER: Joi.string().valid('claude').default('claude'),
+  AI_MODEL: Joi.string().required(),
+  AI_API_KEY_CLAUDE: Joi.string().required(),
+  AI_TIMEOUT_MS: Joi.number().integer().positive().default(15000),
 });

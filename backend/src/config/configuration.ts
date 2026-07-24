@@ -7,6 +7,10 @@ export interface AppConfig {
   supabaseUrl: string;
   supabaseAnonKey: string;
   vehicleDataProvider: string;
+  aiProvider: string;
+  aiModel: string;
+  aiApiKeyClaude: string;
+  aiTimeoutMs: number;
 }
 
 export default (): AppConfig => ({
@@ -21,4 +25,8 @@ export default (): AppConfig => ({
   supabaseUrl: process.env.SUPABASE_URL ?? '',
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY ?? '',
   vehicleDataProvider: process.env.VEHICLE_DATA_PROVIDER ?? 'null',
+  aiProvider: process.env.AI_PROVIDER ?? 'claude',
+  aiModel: process.env.AI_MODEL ?? '',
+  aiApiKeyClaude: process.env.AI_API_KEY_CLAUDE ?? '',
+  aiTimeoutMs: parseInt(process.env.AI_TIMEOUT_MS ?? '15000', 10),
 });

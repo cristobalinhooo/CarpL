@@ -363,3 +363,60 @@ lo confirma con un criterio de producto explícito.
   independientemente de dónde se despliegue después.
 
 ---
+
+## D-008 — Fase 5 (AI Chat): `recommendedState` sin `ANALYZING`, y atomicidad del turno de mensaje
+
+**Fecha:** 2026-07-24
+**Estado:** Resuelto — vigente para el MVP
+
+**Contexto:** Al planificar la Fase 5 se leyó directamente el PRD v3.2
+(Fase 3 — Sistema de Inteligencia; Fase 8 — Sistema Conversacional, §49-64;
+Fase 12 — Especificación del Sistema de IA, §113-130; Fase 17 —
+Implementación del Sistema de IA, §221-241) en vez de apoyarse solo en el
+resumen del Technical Spec — mismo criterio que encontró los huecos de
+D-006. Esa lectura encontró una discrepancia del mismo tipo que D-002/D-006.
+
+**Decisión:**
+
+1. **`recommendedState` nunca puede ser `ANALYZING`.** El Technical Spec
+   §14.10 define `recommendedState: ACTIVE | WAITING_EVIDENCE | ANALYZING`
+   como salida posible de la IA, pero eso contradice tanto la tabla de
+   transiciones ya corregida en D-002 (`Active` nunca transiciona directo a
+   `Analyzing`, solo vía `Ready to Analyze`) como el principio inmutable
+   §130 del PRD ("el usuario mantiene el control sobre el momento del
+   análisis"). Se corrige a `ACTIVE | WAITING_EVIDENCE | READY_TO_ANALYZE`
+   — la IA nunca recomienda analizar directamente, solo puede señalar que
+   hay evidencia suficiente (`READY_TO_ANALYZE`); analizar sigue siendo una
+   acción exclusiva del usuario. Ver `ai-provider.interface.ts`
+   (`AiRecommendedState`) y `dto/ai-structured-response.dto.ts`
+   (`RECOMMENDED_STATES`).
+2. **El turno de mensaje es atómico end-to-end.** El diseño ingenuo
+   ("persistir el mensaje del usuario, después llamar a la IA") se
+   descartó: si la salida de la IA falla la validación de schema (§13.8),
+   ni el mensaje del usuario que originó la llamada ni ningún cambio de
+   estado/hipótesis puede quedar aplicado a medias. En su lugar, el mensaje
+   del usuario se mantiene solo en memoria hasta que la respuesta de la IA
+   valida correctamente; recién entonces se abre una única transacción
+   (`MessagesService.sendMessage`) que persiste el mensaje del usuario, el
+   mensaje de la IA, las actualizaciones de hipótesis con su
+   `HypothesisRevision`, y — si corresponde — la transición de estado (vía
+   `InvestigationsService.transition(..., tx)`, extendido para aceptar un
+   cliente de transacción ya abierto). Si la IA falla, no se escribe nada
+   en la base de datos: el cliente reintenta el mismo `POST` limpio, sin
+   ningún estado intermedio que limpiar.
+3. **La señal de seguridad de la IA (`safety.stop`/`safety.message`,
+   §124/§237) se persiste en campos propios y consultables** de `Message`
+   (`isSafetyStop`, `safetyMessage`), no solo como texto libre enterrado
+   dentro de `message` — pedido explícito del usuario al revisar el plan,
+   dado que seguridad es prioridad explícita del PRD. Sin funcionalidad
+   nueva alrededor todavía en esta fase (por ejemplo, ninguna acción
+   automática cuando `isSafetyStop = true`) — solo que el dato quede
+   guardado y no se pierda.
+
+**Consecuencias:** Ver `backend/src/ai/` (interfaz, DTO validador,
+`ClaudeAiProvider`, prompts) y `backend/src/messages/`
+(`MessagesService.sendMessage`). Cuando se redacte formalmente el ADR-000b
+mencionado en D-002, agregar también la corrección de §14.10 a la lista de
+secciones del Technical Spec a actualizar.
+
+---

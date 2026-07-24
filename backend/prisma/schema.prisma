@@ -24,7 +24,13 @@
 // son alcanzables por API en esta fase — el resto de la tabla de
 // transiciones existe completa desde ya para no requerir un refactor
 // cuando Evidence/AI/Reports (Fases 5-7) empiecen a disparar el resto.
-// Las demás entidades (Messages, Evidence, ...) se añaden en sus fases
+// Fase 5 (AI Chat): tablas `messages`, `hypotheses`, `hypothesis_revisions`
+// (§10.6, §10.6c). `Message.isSafetyStop`/`safetyMessage` persisten la
+// señal de seguridad de la IA (§14.10, PRD §124/§237) de forma
+// consultable, no solo como texto libre — sin funcionalidad nueva
+// alrededor todavía. `Hypothesis.evidenceRefs` queda siempre vacío: no
+// existe Evidence hasta la Fase 6.
+// Las demás entidades (Evidence, Reports, ...) se añaden en sus fases
 // correspondientes del roadmap, no de una sola vez aquí.
 
 generator client {
@@ -198,9 +204,12 @@ model Investigation {
   /// del PRD Estado 1) — ningún otro estado permite esta operación.
   deletedAt       DateTime?           @map("deleted_at")
 
-  vehicle   Vehicle                 @relation(fields: [vehicleId], references: [id])
-  user      User                    @relation(fields: [userId], references: [id])
-  stateLogs InvestigationStateLog[]
+  vehicle             Vehicle                 @relation(fields: [vehicleId], references: [id])
+  user                User                    @relation(fields: [userId], references: [id])
+  stateLogs           InvestigationStateLog[]
+  messages            Message[]
+  hypotheses          Hypothesis[]
+  hypothesisRevisions HypothesisRevision[]
 
   @@index([userId, createdAt], map: "idx_investigations_user_id_created_at")
   @@index([vehicleId, createdAt], map: "idx_investigations_vehicle_id_created_at")
@@ -225,4 +234,84 @@ model InvestigationStateLog {
 
   @@index([investigationId, createdAt], map: "idx_investigation_state_log_investigation_id_created_at")
   @@map("investigation_state_logs")
+}
+
+enum MessageSender {
+  USER
+  AI
+  SYSTEM
+}
+
+/// Conversación cronológica del caso (Technical Spec §10.6).
+model Message {
+  id              String        @id @default(uuid())
+  investigationId String        @map("investigation_id")
+  sender          MessageSender
+  message         String
+  /// Señal de seguridad de la IA (§14.10 `safety.stop`/`safety.message`,
+  /// PRD §124/§237) persistida como dato consultable, no solo enterrada
+  /// como texto libre dentro de `message`. Sin funcionalidad nueva
+  /// alrededor todavía en esta fase — solo se guarda, no se pierde.
+  isSafetyStop    Boolean       @default(false) @map("is_safety_stop")
+  safetyMessage   String?       @map("safety_message")
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  investigation       Investigation        @relation(fields: [investigationId], references: [id])
+  hypothesisRevisions HypothesisRevision[]
+
+  @@index([investigationId, createdAt], map: "idx_messages_investigation_id_created_at")
+  @@index([investigationId, isSafetyStop], map: "idx_messages_investigation_id_safety_stop")
+  @@map("messages")
+}
+
+enum HypothesisStatus {
+  ACTIVE
+  DISCARDED
+  PARTIALLY_CONFIRMED
+}
+
+/// Hipótesis evolutivas y su confianza — estado actual (Technical Spec
+/// §10.6). El historial completo de cambios vive en `HypothesisRevision`.
+model Hypothesis {
+  id              String           @id @default(uuid())
+  investigationId String           @map("investigation_id")
+  hypothesis      String
+  confidence      Decimal
+  reasoning       String
+  status          HypothesisStatus @default(ACTIVE)
+  /// Referencias a evidencia — siempre vacío en esta fase, Evidence llega
+  /// recién en la Fase 6.
+  evidenceRefs    Json?            @map("evidence_refs")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  investigation Investigation        @relation(fields: [investigationId], references: [id])
+  revisions     HypothesisRevision[]
+
+  @@index([investigationId, status], map: "idx_hypotheses_investigation_id_status")
+  @@map("hypotheses")
+}
+
+/// Historial inmutable (append-only) de cada cambio de una hipótesis
+/// (§10.6c, RC-005). Se escribe antes o junto con cada actualización de
+/// `Hypothesis.status`/`confidence`.
+model HypothesisRevision {
+  id                   String            @id @default(uuid())
+  hypothesisId         String            @map("hypothesis_id")
+  investigationId      String            @map("investigation_id")
+  previousConfidence   Decimal?          @map("previous_confidence")
+  newConfidence        Decimal           @map("new_confidence")
+  previousStatus       HypothesisStatus? @map("previous_status")
+  newStatus            HypothesisStatus  @map("new_status")
+  reasoningSnapshot    String            @map("reasoning_snapshot")
+  triggeredByMessageId String?           @map("triggered_by_message_id")
+  createdAt            DateTime          @default(now()) @map("created_at")
+
+  hypothesis         Hypothesis    @relation(fields: [hypothesisId], references: [id])
+  investigation      Investigation @relation(fields: [investigationId], references: [id])
+  triggeredByMessage Message?      @relation(fields: [triggeredByMessageId], references: [id])
+
+  @@index([hypothesisId, createdAt], map: "idx_hypothesis_revision_hypothesis_id_created_at")
+  @@index([investigationId, createdAt], map: "idx_hypothesis_revision_investigation_id_created_at")
+  @@map("hypothesis_revisions")
 }

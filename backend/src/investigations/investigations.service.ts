@@ -6,6 +6,7 @@ import {
 import type {
   Investigation,
   InvestigationStatus,
+  Prisma,
   ResponsibleComponent,
 } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
@@ -148,15 +149,22 @@ export class InvestigationsService {
    * `InvestigationStateLog` en la misma transacción. Reusable por
    * `start` ahora y por Evidence/AI/Reports en fases futuras sin
    * cambiar esta función.
+   *
+   * Acepta opcionalmente un cliente de transacción Prisma ya abierto
+   * (`tx`) para que el caller (p.ej. `MessagesService`) pueda incluir
+   * esta transición dentro de su propia transacción atómica, en vez de
+   * que `transition` abra la suya. Sin `tx`, el comportamiento es
+   * idéntico al de siempre (abre su propia transacción).
    */
   async transition(
     investigationId: string,
     newStatus: InvestigationStatus,
     triggeringEvent: string,
     responsibleComponent: ResponsibleComponent,
+    tx?: Prisma.TransactionClient,
   ): Promise<Investigation> {
-    return this.prisma.$transaction(async (tx) => {
-      const investigation = await tx.investigation.findUnique({
+    const run = async (client: Prisma.TransactionClient) => {
+      const investigation = await client.investigation.findUnique({
         where: { id: investigationId },
       });
 
@@ -172,12 +180,12 @@ export class InvestigationsService {
         );
       }
 
-      const updated = await tx.investigation.update({
+      const updated = await client.investigation.update({
         where: { id: investigationId },
         data: { currentStatus: newStatus },
       });
 
-      await tx.investigationStateLog.create({
+      await client.investigationStateLog.create({
         data: {
           investigationId,
           previousStatus: investigation.currentStatus,
@@ -188,6 +196,8 @@ export class InvestigationsService {
       });
 
       return updated;
-    });
+    };
+
+    return tx ? run(tx) : this.prisma.$transaction((client) => run(client));
   }
 }
