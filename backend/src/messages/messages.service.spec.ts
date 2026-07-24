@@ -599,6 +599,47 @@ describe('MessagesService', () => {
         prisma,
       );
     });
+
+    it('D-015: acepta un turno estando en REPORT_GENERATED (RI-009, antes rechazaba con 409)', async () => {
+      investigationsService.findOneOwned.mockResolvedValue(
+        fakeInvestigation({ currentStatus: 'REPORT_GENERATED' }),
+      );
+      aiProvider.generateResponse.mockResolvedValue(fakeAiResponse());
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+
+      await expect(
+        service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+          message: 'sigo con el mismo problema',
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    it('D-015: turno desde REPORT_GENERATED transiciona a ACTIVE, y no dispara una segunda transición inválida cuando recommendedState también es ACTIVE', async () => {
+      investigationsService.findOneOwned.mockResolvedValue(
+        fakeInvestigation({ currentStatus: 'REPORT_GENERATED' }),
+      );
+      aiProvider.generateResponse.mockResolvedValue(
+        fakeAiResponse({ recommendedState: 'ACTIVE' }),
+      );
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+
+      await service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+        message: 'sigo con el mismo problema',
+      });
+
+      expect(investigationsService.transition).toHaveBeenCalledTimes(1);
+      expect(investigationsService.transition).toHaveBeenCalledWith(
+        INVESTIGATION_ID,
+        'ACTIVE',
+        'USER_CONTINUED_INVESTIGATION',
+        'FRONTEND',
+        prisma,
+      );
+    });
   });
 
   describe('findByInvestigation', () => {

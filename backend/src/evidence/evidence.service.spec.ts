@@ -168,6 +168,7 @@ describe('EvidenceService', () => {
       'ACTIVE',
       'WAITING_EVIDENCE',
       'READY_TO_ANALYZE',
+      'REPORT_GENERATED',
     ])('permite subir evidencia en estado %s', async (currentStatus) => {
       investigationsService.findOneOwned.mockResolvedValue(
         fakeInvestigation({ currentStatus }),
@@ -186,26 +187,24 @@ describe('EvidenceService', () => {
       ).resolves.toBeDefined();
     });
 
-    it.each<Investigation['currentStatus']>([
-      'DRAFT',
-      'ANALYZING',
-      'REPORT_GENERATED',
-      'CLOSED',
-    ])('rechaza con 409 en estado %s', async (currentStatus) => {
-      investigationsService.findOneOwned.mockResolvedValue(
-        fakeInvestigation({ currentStatus }),
-      );
+    it.each<Investigation['currentStatus']>(['DRAFT', 'ANALYZING', 'CLOSED'])(
+      'rechaza con 409 en estado %s',
+      async (currentStatus) => {
+        investigationsService.findOneOwned.mockResolvedValue(
+          fakeInvestigation({ currentStatus }),
+        );
 
-      await expect(
-        service.uploadEvidence(
-          OWNER_ID,
-          INVESTIGATION_ID,
-          { evidenceType: 'IMAGE' },
-          validFile(),
-          'corr-1',
-        ),
-      ).rejects.toBeInstanceOf(ConflictException);
-    });
+        await expect(
+          service.uploadEvidence(
+            OWNER_ID,
+            INVESTIGATION_ID,
+            { evidenceType: 'IMAGE' },
+            validFile(),
+            'corr-1',
+          ),
+        ).rejects.toBeInstanceOf(ConflictException);
+      },
+    );
 
     it('rechaza con 400 si el archivo excede MAX_UPLOAD_SIZE', async () => {
       await expect(
@@ -314,6 +313,30 @@ describe('EvidenceService', () => {
     it('D-012: transiciona READY_TO_ANALYZE -> ACTIVE dentro de la misma tx al subir evidencia', async () => {
       investigationsService.findOneOwned.mockResolvedValue(
         fakeInvestigation({ currentStatus: 'READY_TO_ANALYZE' }),
+      );
+      prisma.evidence.create.mockResolvedValue(fakeEvidence());
+      prisma.attachment.create.mockResolvedValue(fakeAttachment());
+
+      await service.uploadEvidence(
+        OWNER_ID,
+        INVESTIGATION_ID,
+        { evidenceType: 'IMAGE' },
+        validFile(),
+        'corr-1',
+      );
+
+      expect(investigationsService.transition).toHaveBeenCalledWith(
+        INVESTIGATION_ID,
+        'ACTIVE',
+        'USER_SUBMITTED_EVIDENCE',
+        'FRONTEND',
+        prisma,
+      );
+    });
+
+    it('D-015: transiciona REPORT_GENERATED -> ACTIVE dentro de la misma tx al subir evidencia', async () => {
+      investigationsService.findOneOwned.mockResolvedValue(
+        fakeInvestigation({ currentStatus: 'REPORT_GENERATED' }),
       );
       prisma.evidence.create.mockResolvedValue(fakeEvidence());
       prisma.attachment.create.mockResolvedValue(fakeAttachment());

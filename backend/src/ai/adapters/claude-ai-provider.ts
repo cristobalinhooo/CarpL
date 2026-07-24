@@ -13,12 +13,19 @@ import type {
   AiEvidenceAnalysisInput,
   AiEvidenceAnalysisResult,
   AiProvider,
+  AiReportContent,
+  AiReportGenerationContext,
   AiStructuredResponse,
 } from '../ai-provider.interface';
 import { AiEvidenceAnalysisResultDto } from '../dto/ai-evidence-analysis-result.dto';
+import { AiReportContentDto } from '../dto/ai-report-content.dto';
 import { AiStructuredResponseDto } from '../dto/ai-structured-response.dto';
 import { buildContextPrompt } from '../prompts/build-context-prompt';
 import { buildEvidenceAnalysisPrompt } from '../prompts/evidence-analysis-prompt';
+import {
+  buildReportContextPrompt,
+  buildReportGenerationPrompt,
+} from '../prompts/report-generation-prompt';
 import { buildSystemPrompt } from '../prompts/system-prompt';
 
 const RESPONSE_TOOL_NAME = 'submit_investigation_response';
@@ -95,6 +102,161 @@ const EVIDENCE_ANALYSIS_TOOL: Anthropic.Tool = {
       summary: { type: 'string' },
     },
     required: ['variables', 'summary'],
+  },
+};
+
+const REPORT_TOOL_NAME = 'submit_report';
+
+const COST_RANGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    min: { type: 'number' },
+    max: { type: 'number' },
+    currency: { type: 'string' },
+  },
+  required: ['min', 'max', 'currency'],
+} as const;
+
+const EVIDENCE_REFERENCE_SCHEMA = {
+  type: 'object',
+  properties: {
+    evidenceId: { type: ['string', 'null'] },
+    description: { type: 'string' },
+  },
+  required: ['evidenceId', 'description'],
+} as const;
+
+const REPORT_TOOL: Anthropic.Tool = {
+  name: REPORT_TOOL_NAME,
+  description: 'Entrega el informe final consolidado de la investigación.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      summary: { type: 'string' },
+      urgency: {
+        type: 'object',
+        properties: {
+          level: {
+            type: 'string',
+            enum: ['LOW', 'MODERATE', 'HIGH', 'CRITICAL'],
+          },
+          explanation: { type: 'string' },
+          safetyWarning: { type: ['string', 'null'] },
+        },
+        required: ['level', 'explanation'],
+      },
+      hypotheses: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            hypothesisId: { type: 'string' },
+            name: { type: 'string' },
+            whatIsIt: { type: 'string' },
+            whyItMightBeHappening: { type: 'string' },
+            compatibility: {
+              type: 'string',
+              enum: [
+                'VERY_COMPATIBLE',
+                'COMPATIBLE',
+                'PARTIALLY_COMPATIBLE',
+                'LOW_COMPATIBILITY',
+                'INSUFFICIENT_EVIDENCE',
+              ],
+            },
+            supportingEvidence: {
+              type: 'array',
+              items: EVIDENCE_REFERENCE_SCHEMA,
+            },
+            contradictingEvidence: {
+              type: 'array',
+              items: EVIDENCE_REFERENCE_SCHEMA,
+            },
+            missingInformation: { type: 'array', items: { type: 'string' } },
+            likelyPartsInvolved: { type: 'array', items: { type: 'string' } },
+          },
+          required: [
+            'hypothesisId',
+            'name',
+            'whatIsIt',
+            'whyItMightBeHappening',
+            'compatibility',
+            'supportingEvidence',
+            'contradictingEvidence',
+            'missingInformation',
+            'likelyPartsInvolved',
+          ],
+        },
+      },
+      symptoms: { type: 'array', items: { type: 'string' } },
+      whatToCheckFirst: { type: 'array', items: { type: 'string' } },
+      costEstimate: {
+        type: 'object',
+        properties: {
+          available: { type: 'boolean' },
+          approximateRange: COST_RANGE_SCHEMA,
+          relativeLevel: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
+          disclaimer: { type: 'string' },
+        },
+        required: ['available'],
+      },
+      estimatedRepairTime: {
+        type: 'object',
+        properties: {
+          available: { type: 'boolean' },
+          approximateRange: {
+            type: 'object',
+            properties: {
+              min: { type: 'number' },
+              max: { type: 'number' },
+            },
+            required: ['min', 'max'],
+          },
+          relativeLevel: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
+          disclaimer: { type: 'string' },
+        },
+        required: ['available'],
+      },
+      limitations: { type: 'array', items: { type: 'string' } },
+      referencedDocuments: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            chunkId: { type: 'string' },
+            citedIn: { type: 'string' },
+          },
+          required: ['chunkId', 'citedIn'],
+        },
+      },
+      simplifiedExplanation: { type: 'string' },
+      flags: {
+        type: 'object',
+        properties: {
+          insufficientEvidence: { type: 'boolean' },
+          contradictoryEvidence: { type: 'boolean' },
+          multipleIndependentProblems: { type: 'boolean' },
+        },
+        required: [
+          'insufficientEvidence',
+          'contradictoryEvidence',
+          'multipleIndependentProblems',
+        ],
+      },
+    },
+    required: [
+      'summary',
+      'urgency',
+      'hypotheses',
+      'symptoms',
+      'whatToCheckFirst',
+      'costEstimate',
+      'estimatedRepairTime',
+      'limitations',
+      'referencedDocuments',
+      'simplifiedExplanation',
+      'flags',
+    ],
   },
 };
 
@@ -216,6 +378,52 @@ export class ClaudeAiProvider implements AiProvider {
     if (errors.length > 0) {
       throw new ServiceUnavailableException(
         'El proveedor de IA devolvió un análisis con formato inesperado',
+      );
+    }
+
+    return instance;
+  }
+
+  async generateReport(
+    context: AiReportGenerationContext,
+  ): Promise<AiReportContent> {
+    const model = this.config.get<string>('aiModel') ?? '';
+    // Timeout propio, más generoso que AI_TIMEOUT_MS (§11.8 solo fija un
+    // objetivo de ≤15s para la primera respuesta del chat, en vivo frente
+    // al usuario) — generateReport() corre asíncrono vía `jobs`, sin esa
+    // misma presión de tiempo real, y su contexto/salida son mucho más
+    // grandes.
+    const reportTimeoutMs = this.config.get<number>('aiReportTimeoutMs');
+
+    const response = await this.client.messages.create(
+      {
+        model,
+        max_tokens: 4096,
+        system: buildReportGenerationPrompt(),
+        messages: [
+          { role: 'user', content: buildReportContextPrompt(context) },
+        ],
+        tools: [REPORT_TOOL],
+        tool_choice: { type: 'tool', name: REPORT_TOOL_NAME },
+      },
+      { timeout: reportTimeoutMs },
+    );
+
+    const toolUse = response.content.find(
+      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
+    );
+
+    if (!toolUse) {
+      throw new ServiceUnavailableException(
+        'El proveedor de IA no devolvió un informe estructurado',
+      );
+    }
+
+    const instance = plainToInstance(AiReportContentDto, toolUse.input);
+    const errors = validateSync(instance, { whitelist: true });
+    if (errors.length > 0) {
+      throw new ServiceUnavailableException(
+        'El proveedor de IA devolvió un informe con formato inesperado',
       );
     }
 

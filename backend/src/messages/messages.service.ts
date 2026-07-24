@@ -59,17 +59,20 @@ export class MessagesService {
       investigationId,
     );
 
-    // D-012: `READY_TO_ANALYZE` también acepta mensajes — un mensaje nuevo
-    // es la manifestación concreta de "el usuario prefiere seguir
-    // investigando" (transición ya definida en D-002, nunca disparada
-    // hasta ahora). `WAITING_EVIDENCE` sigue bloqueando mensajes: ese
-    // estado existe para exigir evidencia, no conversación.
+    // D-012/D-015: `READY_TO_ANALYZE` y `REPORT_GENERATED` también aceptan
+    // mensajes — un mensaje nuevo es la manifestación concreta de "el
+    // usuario prefiere seguir investigando" (D-002 para el primero; Estado
+    // 7 del PRD + RI-009 para el segundo: "continuar investigando el
+    // mismo problema... retorna al estado Investigando"). `WAITING_EVIDENCE`
+    // sigue bloqueando mensajes: ese estado existe para exigir evidencia,
+    // no conversación.
     if (
       investigation.currentStatus !== 'ACTIVE' &&
-      investigation.currentStatus !== 'READY_TO_ANALYZE'
+      investigation.currentStatus !== 'READY_TO_ANALYZE' &&
+      investigation.currentStatus !== 'REPORT_GENERATED'
     ) {
       throw new ConflictException(
-        'Solo se pueden enviar mensajes a una investigación en curso (Active) o lista para analizar (Ready to Analyze)',
+        'Solo se pueden enviar mensajes a una investigación en curso (Active), lista para analizar (Ready to Analyze) o con informe generado (Report Generated)',
       );
     }
 
@@ -176,16 +179,20 @@ export class MessagesService {
         },
       });
 
-      // D-012: un mensaje nuevo estando en READY_TO_ANALYZE es "el usuario
-      // prefiere seguir investigando" (D-002) — se transiciona a ACTIVE
-      // acá, antes de evaluar `recommendedState` más abajo. `effectiveStatus`
+      // D-012/D-015: un mensaje nuevo estando en READY_TO_ANALYZE o
+      // REPORT_GENERATED es "el usuario prefiere seguir investigando"
+      // (D-002; Estado 7 del PRD + RI-009) — se transiciona a ACTIVE acá,
+      // antes de evaluar `recommendedState` más abajo. `effectiveStatus`
       // (no `investigation.currentStatus`, que quedó desactualizado) es
       // contra lo que se compara esa recomendación: comparar contra el
       // valor pre-turno intentaría una segunda transición ACTIVE → ACTIVE,
       // que `canTransition` rechaza (no existe en la tabla), y haría
       // fallar toda esta transacción.
       let effectiveStatus = investigation.currentStatus;
-      if (effectiveStatus === 'READY_TO_ANALYZE') {
+      if (
+        effectiveStatus === 'READY_TO_ANALYZE' ||
+        effectiveStatus === 'REPORT_GENERATED'
+      ) {
         await this.investigationsService.transition(
           investigationId,
           'ACTIVE',

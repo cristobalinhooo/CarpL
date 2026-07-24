@@ -1,6 +1,6 @@
 /**
  * CarPlus — Schema de `report_json` (Reports.report_json)
- * Versión de schema: 1.0.0
+ * Versión de schema: 1.1.0
  *
  * Fuente de verdad funcional: PRD v3.2, Fase 7 — Especificación del Informe (§34-48)
  * Fuente de verdad de implementación: Technical Specification v2.1, §14.12
@@ -12,6 +12,13 @@
  * (orden, arnés de evaluación de consistencia del AI Engine, §15.5), pero
  * jamás se serializa en `report_json` ni se expone al cliente.
  *
+ * 1.1.0 (2026-07-24, Fase 7): agrega `ReportHypothesis.likelyPartsInvolved`
+ * y `ReportJson.estimatedRepairTime` (D-013 — mismo criterio de honestidad
+ * que `costEstimate`, nunca inventar sin evidencia suficiente). Corrige
+ * `EvidenceConsidered.filesAnalyzed[].summary` a `string | null`: desde la
+ * Fase 6 (D-011) el análisis automático real solo corre para `IMAGE`, así
+ * que `VIDEO`/`AUDIO` nunca tienen un resumen que poner ahí.
+ *
  * Este documento no reemplaza al PRD ni al Technical Spec — es el contrato
  * concreto derivado de ambos para el campo `Reports.report_json`. Cualquier
  * cambio a este schema requiere el mismo tratamiento que un cambio de
@@ -19,7 +26,7 @@
  * incrementada + re-ejecución del arnés de evaluación (§15.5).
  */
 
-export const REPORT_SCHEMA_VERSION = '1.0.0';
+export const REPORT_SCHEMA_VERSION = '1.1.0';
 
 // ─────────────────────────────────────────────────────────────
 // Enums — §37 (Nivel de Urgencia) y §39 (Compatibilidad con la Evidencia)
@@ -70,6 +77,10 @@ export interface ReportHypothesis {
   contradictingEvidence: EvidenceReference[];
   /** §40 ¿Qué información falta? — qué permitiría confirmar/descartar mejor. */
   missingInformation: string[];
+  /** D-013 — piezas/componentes técnicos probablemente involucrados en esta
+   *  hipótesis. Información técnica (qué pieza), no un precio; mismo nivel
+   *  de certeza que la hipótesis misma — nunca una lista cerrada/definitiva. */
+  likelyPartsInvolved: string[];
 }
 
 /** §41 — transparencia de qué información fue considerada. */
@@ -85,8 +96,10 @@ export interface EvidenceConsidered {
   filesAnalyzed: Array<{
     evidenceId: string; // FK a Evidence.id
     type: EvidenceFileType;
-    /** Resumen del análisis, no el análisis crudo (analysis_json vive en Evidence). */
-    summary: string;
+    /** Resumen del análisis, no el análisis crudo (analysis_json vive en Evidence).
+     *  `null` cuando no hay análisis automático disponible para este tipo de
+     *  archivo (siempre el caso para VIDEO/AUDIO en esta fase, D-011). */
+    summary: string | null;
   }>;
   identifiedVariables: Array<{ name: string; value: string }>;
 }
@@ -98,6 +111,18 @@ export interface CostEstimate {
   approximateRange?: { min: number; max: number; currency: string };
   relativeLevel?: 'LOW' | 'MEDIUM' | 'HIGH';
   /** Obligatorio cuando available === true: "el costo depende del taller y la región". */
+  disclaimer?: string;
+}
+
+/** D-013 — mismo criterio exacto que `CostEstimate` (§43) pero en horas de
+ *  mano de obra en vez de dinero: nunca inventar un rango sin evidencia
+ *  suficiente, y advertencia obligatoria de que depende del taller y la
+ *  disponibilidad de repuestos cuando sí se muestra un rango. */
+export interface RepairTimeEstimate {
+  available: boolean;
+  approximateRange?: { min: number; max: number; unit: 'hours' };
+  relativeLevel?: 'LOW' | 'MEDIUM' | 'HIGH';
+  /** Obligatorio cuando available === true. */
   disclaimer?: string;
 }
 
@@ -149,6 +174,9 @@ export interface ReportJson {
 
   /** §43, RI-004 (implícito) — Costos Aproximados. */
   costEstimate: CostEstimate;
+
+  /** D-013 — Tiempo estimado de reparación, mismas reglas que costEstimate. */
+  estimatedRepairTime: RepairTimeEstimate;
 
   /** §44 — Limitaciones del Informe (declaración de no-diagnóstico incluida). */
   limitations: string[];

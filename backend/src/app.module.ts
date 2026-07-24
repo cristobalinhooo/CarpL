@@ -10,6 +10,7 @@ import { EvidenceModule } from './evidence/evidence.module';
 import { InvestigationsModule } from './investigations/investigations.module';
 import { JobsModule } from './jobs/jobs.module';
 import { MessagesModule } from './messages/messages.module';
+import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
 
@@ -31,8 +32,7 @@ import { VehiclesModule } from './vehicles/vehicles.module';
     InvestigationsModule,
     MessagesModule,
     EvidenceModule,
-    // Fase 7 en adelante: ReportsModule (roadmap §16.1 del Technical
-    // Spec) se añade aquí en su fase correspondiente, no de una sola vez.
+    ReportsModule,
   ],
 })
 export class AppModule {}

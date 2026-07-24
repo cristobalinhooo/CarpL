@@ -228,6 +228,7 @@ model Investigation {
   hypothesisRevisions HypothesisRevision[]
   ragRetrievalLogs    RagRetrievalLog[]
   evidence            Evidence[]
+  reports             Report[]
 
   @@index([userId, createdAt], map: "idx_investigations_user_id_created_at")
   @@index([vehicleId, createdAt], map: "idx_investigations_vehicle_id_created_at")
@@ -462,4 +463,24 @@ model Attachment {
   evidence Evidence @relation(fields: [evidenceId], references: [id])
 
   @@map("attachments")
+}
+
+/// Informe consolidado, versionado por investigación (Technical Spec
+/// §10.6/§10.10, PRD RI-009). Nunca se actualiza in-place: cada nueva
+/// generación crea una fila nueva con `reportVersion` incremental; la
+/// vigente se marca con `isLatest: true` (índice único parcial en la
+/// migración garantiza una sola por investigación). Sin PDF (D-014).
+model Report {
+  id               String   @id @default(uuid())
+  investigationId  String   @map("investigation_id")
+  reportVersion    Int      @map("report_version")
+  reportJson       Json     @map("report_json")
+  generatedByModel String   @map("generated_by_model")
+  generatedAt      DateTime @default(now()) @map("generated_at")
+  isLatest         Boolean  @default(true) @map("is_latest")
+
+  investigation Investigation @relation(fields: [investigationId], references: [id])
+
+  @@unique([investigationId, reportVersion], map: "uq_reports_investigation_version")
+  @@map("reports")
 }

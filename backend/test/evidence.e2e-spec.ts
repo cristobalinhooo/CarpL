@@ -11,6 +11,8 @@ import type {
   AiEvidenceAnalysisInput,
   AiEvidenceAnalysisResult,
   AiProvider,
+  AiReportContent,
+  AiReportGenerationContext,
   AiStructuredResponse,
 } from '../src/ai/ai-provider.interface';
 import { AI_PROVIDER } from '../src/ai/ai.module';
@@ -100,6 +102,14 @@ class FakeAiProvider implements AiProvider {
       );
     }
     return Promise.resolve(this.nextAnalysis);
+  }
+
+  generateReport(
+    _context: AiReportGenerationContext,
+  ): Promise<AiReportContent> {
+    return Promise.reject(
+      new Error('FakeAiProvider: generateReport no se usa en este e2e'),
+    );
   }
 }
 

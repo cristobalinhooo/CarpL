@@ -1,7 +1,10 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { ServiceUnavailableException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
-import type { AiConversationContext } from '../ai-provider.interface';
+import type {
+  AiConversationContext,
+  AiReportGenerationContext,
+} from '../ai-provider.interface';
 import { ClaudeAiProvider } from './claude-ai-provider';
 
 interface FakeAnthropicClient {
@@ -41,9 +44,11 @@ describe('ClaudeAiProvider', () => {
   beforeEach(() => {
     client = { messages: { create: jest.fn() } };
     config = {
-      get: jest.fn((key: string) =>
-        key === 'aiModel' ? 'claude-sonnet-5' : undefined,
-      ),
+      get: jest.fn((key: string) => {
+        if (key === 'aiModel') return 'claude-sonnet-5';
+        if (key === 'aiReportTimeoutMs') return 60000;
+        return undefined;
+      }),
     };
     provider = new ClaudeAiProvider(
       client as unknown as Anthropic,
@@ -271,6 +276,167 @@ describe('ClaudeAiProvider', () => {
       await expect(
         provider.analyzeEvidence(validEvidenceInput()),
       ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+  });
+
+  describe('generateReport', () => {
+    function fakeReportContext(): AiReportGenerationContext {
+      return {
+        vehicle: { brand: 'Toyota', model: 'Corolla', year: 2018 },
+        problem: { title: 'Ruido al frenar', description: 'Ruido metálico' },
+        conversation: [{ sender: 'USER', message: 'Frena raro' }],
+        hypotheses: [
+          {
+            id: 'hyp-1',
+            hypothesis: 'Pastillas de freno gastadas',
+            confidence: 0.7,
+            status: 'ACTIVE',
+            reasoning: 'Ruido metálico compatible con desgaste',
+          },
+        ],
+        evidence: [],
+        citedDocumentation: [],
+      };
+    }
+
+    function validReportToolInput() {
+      return {
+        summary: 'El ruido parece compatible con desgaste de pastillas.',
+        urgency: { level: 'MODERATE', explanation: 'No es crítico todavía.' },
+        hypotheses: [
+          {
+            hypothesisId: 'hyp-1',
+            name: 'Pastillas de freno gastadas',
+            whatIsIt: 'Las pastillas de freno están gastadas.',
+            whyItMightBeHappening: 'El ruido metálico es compatible con eso.',
+            compatibility: 'COMPATIBLE',
+            supportingEvidence: [],
+            contradictingEvidence: [],
+            missingInformation: [],
+            likelyPartsInvolved: ['Pastillas de freno'],
+          },
+        ],
+        symptoms: ['Ruido metálico al frenar'],
+        whatToCheckFirst: ['Revisar el espesor de las pastillas'],
+        costEstimate: { available: false },
+        estimatedRepairTime: { available: false },
+        limitations: ['Este informe no reemplaza un diagnóstico profesional.'],
+        referencedDocuments: [],
+        simplifiedExplanation:
+          'Puede que las pastillas de freno estén gastadas.',
+        flags: {
+          insufficientEvidence: false,
+          contradictoryEvidence: false,
+          multipleIndependentProblems: false,
+        },
+      };
+    }
+
+    it('llama al modelo forzando tool_choice y devuelve el informe validado', async () => {
+      client.messages.create.mockResolvedValue({
+        content: [
+          {
+            type: 'tool_use',
+            id: 't1',
+            name: 'submit_report',
+            input: validReportToolInput(),
+          },
+        ],
+      });
+
+      const result = await provider.generateReport(fakeReportContext());
+
+      expect(client.messages.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'claude-sonnet-5',
+          tool_choice: { type: 'tool', name: 'submit_report' },
+        }),
+        { timeout: 60000 },
+      );
+      expect(result.summary).toBe(validReportToolInput().summary);
+      expect(result.hypotheses).toHaveLength(1);
+      expect(result.hypotheses[0].likelyPartsInvolved).toEqual([
+        'Pastillas de freno',
+      ]);
+    });
+
+    it('rechaza con ServiceUnavailableException si no hay bloque tool_use', async () => {
+      client.messages.create.mockResolvedValue({
+        content: [{ type: 'text', text: 'no debería pasar esto' }],
+      });
+
+      await expect(
+        provider.generateReport(fakeReportContext()),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it('rechaza con ServiceUnavailableException si urgency.level es inválido', async () => {
+      client.messages.create.mockResolvedValue({
+        content: [
+          {
+            type: 'tool_use',
+            id: 't1',
+            name: 'submit_report',
+            input: {
+              ...validReportToolInput(),
+              urgency: { level: 'EXTREME', explanation: 'x' },
+            },
+          },
+        ],
+      });
+
+      await expect(
+        provider.generateReport(fakeReportContext()),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it('rechaza con ServiceUnavailableException si estimatedRepairTime.available no es boolean', async () => {
+      client.messages.create.mockResolvedValue({
+        content: [
+          {
+            type: 'tool_use',
+            id: 't1',
+            name: 'submit_report',
+            input: {
+              ...validReportToolInput(),
+              estimatedRepairTime: { available: 'yes' },
+            },
+          },
+        ],
+      });
+
+      await expect(
+        provider.generateReport(fakeReportContext()),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it('acepta costEstimate con approximateRange y disclaimer', async () => {
+      client.messages.create.mockResolvedValue({
+        content: [
+          {
+            type: 'tool_use',
+            id: 't1',
+            name: 'submit_report',
+            input: {
+              ...validReportToolInput(),
+              costEstimate: {
+                available: true,
+                approximateRange: { min: 20000, max: 40000, currency: 'CLP' },
+                disclaimer: 'Depende del taller y la región.',
+              },
+            },
+          },
+        ],
+      });
+
+      const result = await provider.generateReport(fakeReportContext());
+
+      expect(result.costEstimate.available).toBe(true);
+      expect(result.costEstimate.approximateRange).toEqual({
+        min: 20000,
+        max: 40000,
+        currency: 'CLP',
+      });
     });
   });
 });

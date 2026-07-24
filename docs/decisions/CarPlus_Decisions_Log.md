@@ -609,9 +609,7 @@ unitarios y e2e dedicados (turno de mensaje y subida de evidencia desde
 ## D-013 — Nota de roadmap para Fase 7 (Informes): piezas probablemente involucradas y tiempo estimado de reparación
 
 **Fecha:** 2026-07-24
-**Estado:** Nota de roadmap — sin implementar; fuera de alcance de la
-Fase 6 (Evidencia), aplica cuando se diseñe la Fase 7 (Informes) en
-detalle
+**Estado:** Resuelto — implementado en la Fase 7
 
 **Contexto:** El usuario adelanta dos campos que deberá incluir
 `report_json` cuando se diseñe la Fase 7, con el mismo criterio de
@@ -645,5 +643,125 @@ repuestos).
 probablemente involucradas por hipótesis — ambos sujetos a la misma
 regla de "nunca inventar sin evidencia suficiente" que ya rige el resto
 del informe (D-001, PRD §43).
+
+**Resolución (Fase 7):** `ReportHypothesis.likelyPartsInvolved: string[]`
+y `ReportJson.estimatedRepairTime` (mismo shape que `CostEstimate`, en
+horas) agregados a
+`docs/technical-spec/contracts/report-json.schema.ts`
+(`REPORT_SCHEMA_VERSION` → `1.1.0`), y reflejados en
+`AiReportContent`/`AiReportContentDto` (`backend/src/ai/`) y en el
+`report_json` que persiste `ReportGenerationJobHandler`. Ambos sujetos a
+la misma regla de honestidad que el resto del informe: si no hay
+evidencia suficiente, `available: false` y ningún rango inventado
+(codificado explícitamente en `report-generation-prompt.ts`).
+
+---
+
+## D-014 — Fase 7 (Informes): exportación/descarga de PDF diferida, no se implementa en el MVP
+
+**Fecha:** 2026-07-24
+**Estado:** Resuelto — vigente para el MVP
+
+**Contexto:** Al planificar la Fase 7, la lectura directa del PRD v3.2
+§34-48 encontró una discrepancia grande y repetida con el Technical
+Spec. El PRD marca la exportación en PDF como fuera del alcance del MVP
+en dos lugares independientes y consistentes entre sí:
+- §48 ("Evolución del Informe"), que lista explícitamente
+  "Exportación en PDF" y "Compartir el informe mediante un enlace"
+  entre las funcionalidades futuras, cerrando con: "Estas
+  funcionalidades no forman parte del alcance del MVP."
+- El Estado 7 ("Informe Generado", acciones permitidas por estado),
+  cuya propia lista marca "Compartir informe (futuro)" y "Descargar
+  informe (futuro)".
+
+El Technical Spec v2.1, en cambio, insiste en "PDF bajo demanda" como
+entregable MVP de la Fase 7 en más de 10 lugares distintos: tabla de
+arquitectura (línea 68), roadmap (línea 102), tabla de API —
+`GET /api/v1/investigations/{id}/report.pdf` (línea 580), objetivo de
+performance (línea 602), responsabilidad del módulo Reports (línea
+685), backlog de roadmap (línea 915), prioridad P1 (línea 925), y
+Definition of Done (líneas 938 y 958).
+
+**Decisión:** Se resuelve a favor del PRD — mismo criterio que
+D-002/D-006/D-011 (el PRD prevalece en decisiones de alcance/producto,
+el Technical Spec en detalles de implementación; acá la pregunta es "
+¿existe esta funcionalidad en el MVP?", inequívocamente de alcance).
+Confirmado explícitamente con el usuario antes de implementar.
+
+1. Esta fase construye `report_json` completo, versionado
+   (`report_version`/`is_latest`) y consultable por API
+   (`GET .../report`, `GET .../reports`, `GET .../reports/{version}`).
+2. **No** se implementa ningún endpoint `.pdf` ni se agrega ninguna
+   dependencia de generación de PDF en esta fase.
+3. El Technical Spec queda con una discrepancia de alcance no corregida
+   en su propio texto (mismo tratamiento que otras veces: esta bitácora
+   es la fuente de verdad de la resolución real, no se edita el
+   Technical Spec en este proyecto).
+
+**Consecuencias:** `backend/src/reports/reports.controller.ts` no
+expone `.pdf`. Si más adelante se decide construir la exportación (post-
+MVP), es una fase/decisión nueva, no una corrección de esta.
+
+---
+
+## D-015 — Fase 7 (Informes): "Analizar ahora" solo es legal desde `READY_TO_ANALYZE`; cierre del ciclo `REPORT_GENERATED → ACTIVE`
+
+**Fecha:** 2026-07-24
+**Estado:** Resuelto — vigente para el MVP
+
+**Contexto:** El Technical Spec v2.1 §13.7 describe el flujo de
+`POST .../report` con este texto literal: "`Reports` valida que el caso
+esté en `Analyzing` (o dispara la transición `Active/Waiting Evidence →
+Analyzing` si el usuario solicitó 'Analizar ahora')". Esto sugeriría que
+"Analizar ahora" podría disparar la transición directamente desde
+`ACTIVE`/`WAITING_EVIDENCE`, sin pasar por `READY_TO_ANALYZE`.
+
+Al leer directamente la tabla oficial de transiciones del PRD (§29 —
+"ninguna transición no listada aquí está permitida") se confirmó que
+esto es un artefacto desactualizado: la única fila que lleva a
+`Analizando` es `Listo para Analizar → Analizando` ("El usuario
+selecciona 'Analizar ahora'"). No existe ninguna fila
+`Investigando/Esperando Respuesta → Analizando`. Esto coincide
+exactamente con `investigation-state-machine.ts`, ya construido y
+probado desde D-002 (`ACTIVE: ['WAITING_EVIDENCE', 'READY_TO_ANALYZE']`
+— sin `ANALYZING` en esa lista). El texto de §13.7 es anterior a la
+restauración de la tabla de 7 estados en D-002 y quedó sin corregir,
+mismo tipo de artefacto que D-002 mismo corrigió en su momento.
+
+La misma tabla oficial (§29) también confirma la recuperación de error
+ya prevista en el código: `Analizando → Listo para Analizar` ocurre "si
+hubo un error durante el análisis (RC-006)".
+
+Por separado, el Estado 7 del PRD ("Informe Generado") permite
+explícitamente "continuar investigando el mismo problema dentro del
+mismo caso (retorna al estado Investigando; ver RI-009, Fase 7).
+Incluye responder nuevas preguntas, adjuntar nueva evidencia o describir
+nuevos síntomas" — la misma tabla §29 lista `Informe Generado →
+Investigando`.
+
+**Decisión:**
+
+1. `POST /investigations/{id}/report` exige `currentStatus ===
+   'READY_TO_ANALYZE'` (409 en cualquier otro estado), sin excepción —
+   no se implementa el atajo que sugiere el Technical Spec §13.7.
+2. `ReportGenerationJobHandler`, si la llamada a la IA falla, transiciona
+   la investigación `ANALYZING → READY_TO_ANALYZE`
+   (`'REPORT_GENERATION_FAILED'`, `'BACKEND'`) antes de relanzar el error
+   — implementa la recuperación de error de RC-006/§29, evita que un caso
+   quede encallado en `ANALYZING` sin salida.
+3. **`MessagesService.sendMessage`** y **`EvidenceService.uploadEvidence`**
+   (D-012) se extienden una vez más: `REPORT_GENERATED` se agrega como
+   estado de origen válido, transicionando primero a `ACTIVE`
+   (mismo `'USER_CONTINUED_INVESTIGATION'` que ya se usa para
+   `READY_TO_ANALYZE`) — implementa RI-009 ("continuar investigando" tras
+   un informe genera una nueva versión en el próximo "Analizar ahora", no
+   reemplaza la anterior).
+
+**Consecuencias:** Ver `backend/src/reports/reports.service.ts`
+(`requestAnalysis`), `backend/src/reports/report-generation.job-handler.ts`
+(manejo de error), `backend/src/messages/messages.service.ts` y
+`backend/src/evidence/evidence.service.ts` (estado de origen
+`REPORT_GENERATED`). El Technical Spec §13.7 queda con esta discrepancia
+sin corregir en su propio texto — esta bitácora es la fuente de verdad.
 
 ---

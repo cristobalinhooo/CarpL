@@ -39,6 +39,12 @@ export const envValidationSchema = Joi.object({
   AI_MODEL: Joi.string().required(),
   AI_API_KEY_CLAUDE: Joi.string().required(),
   AI_TIMEOUT_MS: Joi.number().integer().positive().default(15000),
+  // Fase 7 — Informes. generateReport() es asíncrono (vía `jobs`, sin
+  // espera en vivo del usuario, a diferencia de la primera respuesta del
+  // chat que sí tiene el objetivo ≤15s de §11.8) y su contexto/salida son
+  // mucho más grandes — necesita su propio timeout, más generoso, en vez
+  // de heredar AI_TIMEOUT_MS.
+  AI_REPORT_TIMEOUT_MS: Joi.number().integer().positive().default(60000),
 
   // Fase 5b — RAG técnico. Alcance mínimo: solo existe el adaptador nulo
   // de embeddings, así que solo "null" es un valor válido por ahora —

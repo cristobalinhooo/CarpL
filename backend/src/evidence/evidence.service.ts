@@ -33,13 +33,16 @@ const MIME_CATEGORY: Record<EvidenceType, string> = {
   AUDIO: 'audio',
 };
 
-// D-012: WAITING_EVIDENCE (existe precisamente para exigir evidencia) y
-// READY_TO_ANALYZE ("seguir investigando" también puede manifestarse
-// como adjuntar más evidencia, no solo mandar un mensaje) vuelven a
+// D-012/D-015: WAITING_EVIDENCE (existe precisamente para exigir
+// evidencia), READY_TO_ANALYZE ("seguir investigando" también puede
+// manifestarse como adjuntar más evidencia, no solo mandar un mensaje) y
+// REPORT_GENERATED (Estado 7 del PRD + RI-009: "continuar investigando el
+// mismo problema... incluye... adjuntar nueva evidencia") vuelven a
 // ACTIVE al recibir un archivo.
 const STATUSES_THAT_RETURN_TO_ACTIVE: InvestigationStatus[] = [
   'WAITING_EVIDENCE',
   'READY_TO_ANALYZE',
+  'REPORT_GENERATED',
 ];
 const ALLOWED_STATUSES_FOR_UPLOAD: InvestigationStatus[] = [
   'ACTIVE',
@@ -75,7 +78,7 @@ export class EvidenceService {
 
     if (!ALLOWED_STATUSES_FOR_UPLOAD.includes(investigation.currentStatus)) {
       throw new ConflictException(
-        'Solo se puede subir evidencia mientras la investigación está en curso (Active, Waiting Evidence o Ready to Analyze)',
+        'Solo se puede subir evidencia mientras la investigación está en curso (Active, Waiting Evidence, Ready to Analyze o Report Generated)',
       );
     }
 
