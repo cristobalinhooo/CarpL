@@ -1,0 +1,43 @@
+# CarPlus — Plataforma local (Fase 1, roadmap Technical Spec §16.1)
+#
+# PostgreSQL + pgvector corren acá en local. Supabase Auth/Storage son un
+# proyecto Cloud aparte (plan gratuito) — no se levantan en este compose,
+# se configuran vía SUPABASE_* en backend/.env cuando la Fase 2 los integre.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-carplus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-carplus}
+      POSTGRES_DB: ${POSTGRES_DB:-carplus}
+    ports:
+      - '5432:5432'
+    volumes:
+      - carplus_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-carplus}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # Dentro de la red de Docker Compose el host de Postgres es el nombre
+      # del servicio (`postgres`), no `localhost` — sobrescribe lo que
+      # traiga backend/.env pensado para correr el backend fuera de Docker.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-carplus}:${POSTGRES_PASSWORD:-carplus}@postgres:5432/${POSTGRES_DB:-carplus}?schema=public
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  carplus_postgres_data:

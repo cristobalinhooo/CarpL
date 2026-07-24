@@ -1,0 +1,228 @@
+// CarPlus — Prisma Schema
+// Fase 1 (Plataforma): tabla `jobs` que respalda el módulo `jobs`
+// (Technical Spec §9.12, §10.6d).
+// Fase 2 (Identidad): tabla `users`, perfil local vinculado a Supabase Auth
+// (Technical Spec §10.3). Nunca almacena password — las credenciales son
+// 100% responsabilidad de Supabase Auth.
+//
+// La extensión `pgvector` se habilita desde ya porque es infraestructura de
+// Fase 1 ("PostgreSQL (+pgvector)", roadmap §16.1), aunque el primer modelo
+// que la use (`DocumentChunk`, RAG técnico) llega recién en la Fase 5b.
+// Fase 3 (Vehículos): tabla `vehicles` — solo registro manual por ahora.
+// `registration_method`/`data_source`/`data_synced_at` ya existen en la
+// entidad unificada (Technical Spec §10.4) pero el backend nunca los
+// setea a otra cosa que MANUAL/null hasta la Fase 3b.
+// Fase 3b (Vehicle Data Provider): tabla `vehicle_lookup_logs` (§10.5)
+// para trazabilidad de cada búsqueda por patente. Alcance mínimo: solo
+// existe el adaptador nulo (siempre NOT_FOUND), así que `vehicle_id`
+// queda siempre null aquí — solo se llenaría si una búsqueda tuviera
+// éxito, y eso no puede pasar todavía.
+// Fase 4 (Investigaciones): tablas `investigations` e
+// `investigation_state_logs`. Máquina de estados de 7 estados según
+// D-002 (que restauró READY_TO_ANALYZE, corrigiendo una simplificación
+// no documentada del Technical Spec §9.10 original). Solo Draft y Active
+// son alcanzables por API en esta fase — el resto de la tabla de
+// transiciones existe completa desde ya para no requerir un refactor
+// cuando Evidence/AI/Reports (Fases 5-7) empiecen a disparar el resto.
+// Las demás entidades (Messages, Evidence, ...) se añaden en sus fases
+// correspondientes del roadmap, no de una sola vez aquí.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+enum JobType {
+  ANALYZE_EVIDENCE
+  GENERATE_REPORT
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+/// Cola ligera de tareas asíncronas (Technical Spec §9.12, §10.6d).
+/// Único módulo que conoce esta tabla: `jobs`. `Evidence` y `Reports`
+/// (fases futuras) solo encolan y consultan estado a través de `JobsService`.
+model Job {
+  id            String    @id @default(uuid())
+  jobType       JobType   @map("job_type")
+  status        JobStatus @default(PENDING)
+  /// `evidence_id` o `investigation_id`, según `job_type`.
+  referenceId   String    @map("reference_id")
+  attempts      Int       @default(0)
+  correlationId String    @map("correlation_id")
+  /// Solo mensaje sanitizado — nunca stack trace ni payload de proveedor (§10.6d).
+  lastError     String?   @map("last_error")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, jobType], map: "idx_jobs_status_job_type")
+  @@index([correlationId], map: "idx_jobs_correlation_id")
+  @@map("jobs")
+}
+
+/// Perfil de aplicación vinculado a Supabase Auth (Technical Spec §10.3).
+/// Nunca almacena `password_hash` — las credenciales pertenecen a Supabase.
+model User {
+  id             String    @id @default(uuid())
+  /// `sub` del JWT de Supabase Auth (auth.users.id).
+  supabaseAuthId String    @unique @map("supabase_auth_id")
+  email          String    @unique
+  fullName       String    @map("full_name")
+  profileImage   String?   @map("profile_image")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  vehicles          Vehicle[]
+  vehicleLookupLogs VehicleLookupLog[]
+  investigations    Investigation[]
+
+  @@map("users")
+}
+
+enum VehicleRegistrationMethod {
+  MANUAL
+  PLATE_LOOKUP
+}
+
+/// Vehículos propiedad del usuario (Technical Spec §10.4). Entidad
+/// unificada para registro manual y por patente — en esta fase
+/// (Vehículos, manual) `registrationMethod` es siempre `MANUAL` y
+/// `dataSource`/`dataSyncedAt` siempre `null`; los setea la Fase 3b.
+model Vehicle {
+  id                 String                    @id @default(uuid())
+  userId             String                    @map("user_id")
+  brand              String
+  model              String
+  version            String?
+  year               Int
+  engine             String?
+  displacement       String?
+  fuelType           String?                   @map("fuel_type")
+  transmission       String?
+  traction           String?
+  mileage            Int?
+  vin                String?
+  plate              String?
+  registrationMethod VehicleRegistrationMethod @default(MANUAL) @map("registration_method")
+  dataSource         String?                   @map("data_source")
+  dataSyncedAt       DateTime?                 @map("data_synced_at")
+  createdAt          DateTime                  @default(now()) @map("created_at")
+  updatedAt          DateTime                  @updatedAt @map("updated_at")
+  deletedAt          DateTime?                 @map("deleted_at")
+
+  user           User               @relation(fields: [userId], references: [id])
+  lookupLogs     VehicleLookupLog[]
+  investigations Investigation[]
+
+  @@index([userId, deletedAt], map: "idx_vehicles_user_id_deleted_at")
+  @@index([plate], map: "idx_vehicles_plate")
+  @@map("vehicles")
+}
+
+enum VehicleLookupStatus {
+  SUCCESS
+  NOT_FOUND
+  PROVIDER_ERROR
+}
+
+/// Traza de cada búsqueda por patente contra un Vehicle Data Provider
+/// (Technical Spec §10.5). No persiste el payload crudo del proveedor —
+/// minimización de datos.
+model VehicleLookupLog {
+  id           String              @id @default(uuid())
+  userId       String              @map("user_id")
+  /// Nulo mientras la búsqueda no derive en un vehículo guardado. Con
+  /// el adaptador nulo (única implementación en esta fase) siempre es
+  /// null: nunca hay un SUCCESS que confirmar todavía.
+  vehicleId    String?             @map("vehicle_id")
+  plateInput   String              @map("plate_input")
+  providerName String              @map("provider_name")
+  status       VehicleLookupStatus
+  createdAt    DateTime            @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id])
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id])
+
+  @@index([userId, createdAt], map: "idx_vehicle_lookup_log_user_id_created_at")
+  @@map("vehicle_lookup_logs")
+}
+
+enum InvestigationStatus {
+  DRAFT
+  ACTIVE
+  WAITING_EVIDENCE
+  READY_TO_ANALYZE
+  ANALYZING
+  REPORT_GENERATED
+  CLOSED
+}
+
+enum ResponsibleComponent {
+  FRONTEND
+  BACKEND
+  INVESTIGATION_ENGINE
+  DECISION_ENGINE
+  LEARNING_SYSTEM
+}
+
+/// Caso mecánico y su ciclo de vida (Technical Spec §10.6). Solo Draft y
+/// Active son alcanzables por API en esta fase — el resto de la máquina
+/// de estados (§9.10, corregida por D-002) existe completa desde ya.
+model Investigation {
+  id              String              @id @default(uuid())
+  vehicleId       String              @map("vehicle_id")
+  userId          String              @map("user_id")
+  title           String
+  description     String
+  currentStatus   InvestigationStatus @default(DRAFT) @map("current_status")
+  /// Siempre null en esta fase — nada la calcula todavía (igual que
+  /// `Vehicle.dataSource` antes de la Fase 3b).
+  confidenceScore Decimal?            @map("confidence_score")
+  startedAt       DateTime?           @map("started_at")
+  finishedAt      DateTime?           @map("finished_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  /// Solo se usa mientras el caso está en Draft (D-006, "Eliminar caso"
+  /// del PRD Estado 1) — ningún otro estado permite esta operación.
+  deletedAt       DateTime?           @map("deleted_at")
+
+  vehicle   Vehicle                 @relation(fields: [vehicleId], references: [id])
+  user      User                    @relation(fields: [userId], references: [id])
+  stateLogs InvestigationStateLog[]
+
+  @@index([userId, createdAt], map: "idx_investigations_user_id_created_at")
+  @@index([vehicleId, createdAt], map: "idx_investigations_vehicle_id_created_at")
+  @@index([currentStatus], map: "idx_investigations_current_status")
+  @@map("investigations")
+}
+
+/// Auditoría inmutable (append-only) de cada transición de estado
+/// (§10.6b, RC-004/RC-005). Ninguna operación de dominio puede
+/// actualizar ni eliminar sus filas.
+model InvestigationStateLog {
+  id                   String               @id @default(uuid())
+  investigationId      String               @map("investigation_id")
+  /// Nulo solo para la fila de creación inicial (entrada a Draft).
+  previousStatus       InvestigationStatus? @map("previous_status")
+  newStatus            InvestigationStatus  @map("new_status")
+  triggeringEvent      String               @map("triggering_event")
+  responsibleComponent ResponsibleComponent @map("responsible_component")
+  createdAt            DateTime             @default(now()) @map("created_at")
+
+  investigation Investigation @relation(fields: [investigationId], references: [id])
+
+  @@index([investigationId, createdAt], map: "idx_investigation_state_log_investigation_id_created_at")
+  @@map("investigation_state_logs")
+}

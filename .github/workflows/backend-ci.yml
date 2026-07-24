@@ -1,0 +1,76 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-ci.yml'
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: carplus
+          POSTGRES_PASSWORD: carplus
+          POSTGRES_DB: carplus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U carplus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://carplus:carplus@localhost:5432/carplus?schema=public
+      # Placeholder: CI nunca llama a Supabase de verdad (los tests de
+      # auth/ mockean SupabaseAuthService o usan un JWKS local), pero
+      # env.validation.ts (Joi) exige estas variables para arrancar desde
+      # la Fase 2 — ver docs/decisions/CarPlus_Decisions_Log.md D-004.
+      SUPABASE_URL: https://placeholder.supabase.co
+      SUPABASE_ANON_KEY: placeholder-anon-key
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Prisma generate
+        run: npm run prisma:generate
+
+      - name: Prisma migrate deploy
+        run: npm run prisma:deploy
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test -- --ci
+
+      - name: E2E tests
+        run: npm run test:e2e -- --ci
