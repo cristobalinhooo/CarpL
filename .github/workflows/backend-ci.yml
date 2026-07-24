@@ -50,6 +50,10 @@ jobs:
       AI_PROVIDER: claude
       AI_MODEL: claude-sonnet-5
       AI_API_KEY_CLAUDE: placeholder-anthropic-key
+      # Ídem para Supabase Storage desde la Fase 6 — los tests de evidence/
+      # sobreescriben STORAGE_CLIENT con un fake en memoria, CI nunca toca
+      # Supabase Storage real.
+      SUPABASE_SERVICE_ROLE_KEY: placeholder-service-role-key
 
     steps:
       - uses: actions/checkout@v4

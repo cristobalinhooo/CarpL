@@ -3,6 +3,13 @@
 # PostgreSQL + pgvector corren acá en local. Supabase Auth/Storage son un
 # proyecto Cloud aparte (plan gratuito) — no se levantan en este compose,
 # se configuran vía SUPABASE_* en backend/.env cuando la Fase 2 los integre.
+#
+# `name` fijo a propósito: sin esto, Docker Compose deriva el nombre del
+# proyecto (y por lo tanto el volumen/red/contenedores) del nombre de la
+# carpeta actual — si la carpeta se renombra (p. ej. "CarPlus v2" →
+# "CarPlus v2 (Carrum)", D-010), `docker compose up` crea silenciosamente
+# un volumen nuevo y vacío en vez de reusar los datos existentes.
+name: carplusv2
 
 services:
   postgres:

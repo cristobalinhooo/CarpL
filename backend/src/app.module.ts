@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { CommonModule } from './common/common.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { DatabaseModule } from './database/database.module';
+import { EvidenceModule } from './evidence/evidence.module';
 import { InvestigationsModule } from './investigations/investigations.module';
 import { JobsModule } from './jobs/jobs.module';
 import { MessagesModule } from './messages/messages.module';
@@ -29,9 +30,9 @@ import { VehiclesModule } from './vehicles/vehicles.module';
     VehiclesModule,
     InvestigationsModule,
     MessagesModule,
-    // Fase 6 en adelante: EvidenceModule, ReportsModule, RagModule,
-    // StorageModule (roadmap §16.1 del Technical Spec) se añaden aquí en
-    // su fase correspondiente, no de una sola vez.
+    EvidenceModule,
+    // Fase 7 en adelante: ReportsModule (roadmap §16.1 del Technical
+    // Spec) se añade aquí en su fase correspondiente, no de una sola vez.
   ],
 })
 export class AppModule {}

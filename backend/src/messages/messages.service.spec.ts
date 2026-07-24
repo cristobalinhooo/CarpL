@@ -26,6 +26,7 @@ interface FakePrisma {
   };
   hypothesisRevision: { create: jest.Mock };
   ragRetrievalLog: { create: jest.Mock };
+  evidence: { findMany: jest.Mock };
   $transaction: jest.Mock;
 }
 
@@ -135,6 +136,7 @@ function createFakePrisma(): FakePrisma {
     },
     hypothesisRevision: { create: jest.fn() },
     ragRetrievalLog: { create: jest.fn() },
+    evidence: { findMany: jest.fn() },
   } as unknown as FakePrisma;
 
   prisma.$transaction = jest.fn((callback: (tx: FakePrisma) => unknown) =>
@@ -166,6 +168,7 @@ describe('MessagesService', () => {
     vehiclesService.findOneOwned.mockResolvedValue(fakeVehicle());
     prisma.message.findMany.mockResolvedValue([]);
     prisma.hypothesis.findMany.mockResolvedValue([]);
+    prisma.evidence.findMany.mockResolvedValue([]);
     documentRetrievalService.retrieveRelevantChunks.mockResolvedValue([]);
 
     service = new MessagesService(
@@ -518,6 +521,83 @@ describe('MessagesService', () => {
           queryText: `${investigation.title}. ${investigation.description}. Frena raro`,
         },
       });
+    });
+
+    it('D-012: acepta un turno estando en READY_TO_ANALYZE (antes rechazaba con 409)', async () => {
+      investigationsService.findOneOwned.mockResolvedValue(
+        fakeInvestigation({ currentStatus: 'READY_TO_ANALYZE' }),
+      );
+      aiProvider.generateResponse.mockResolvedValue(fakeAiResponse());
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+
+      await expect(
+        service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+          message: 'una pregunta más',
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    it('D-012: turno desde READY_TO_ANALYZE transiciona a ACTIVE, y no dispara una segunda transición inválida cuando recommendedState también es ACTIVE', async () => {
+      investigationsService.findOneOwned.mockResolvedValue(
+        fakeInvestigation({ currentStatus: 'READY_TO_ANALYZE' }),
+      );
+      aiProvider.generateResponse.mockResolvedValue(
+        fakeAiResponse({ recommendedState: 'ACTIVE' }),
+      );
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+
+      await service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+        message: 'una pregunta más',
+      });
+
+      // Solo la transición READY_TO_ANALYZE -> ACTIVE de D-012 — nunca un
+      // intento adicional de ACTIVE -> ACTIVE (canTransition lo rechaza).
+      expect(investigationsService.transition).toHaveBeenCalledTimes(1);
+      expect(investigationsService.transition).toHaveBeenCalledWith(
+        INVESTIGATION_ID,
+        'ACTIVE',
+        'USER_CONTINUED_INVESTIGATION',
+        'FRONTEND',
+        prisma,
+      );
+    });
+
+    it('D-012: turno desde READY_TO_ANALYZE con recommendedState WAITING_EVIDENCE transiciona a ese estado (no se queda en ACTIVE)', async () => {
+      investigationsService.findOneOwned.mockResolvedValue(
+        fakeInvestigation({ currentStatus: 'READY_TO_ANALYZE' }),
+      );
+      aiProvider.generateResponse.mockResolvedValue(
+        fakeAiResponse({ recommendedState: 'WAITING_EVIDENCE' }),
+      );
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+
+      await service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+        message: 'necesito más evidencia',
+      });
+
+      expect(investigationsService.transition).toHaveBeenCalledTimes(2);
+      expect(investigationsService.transition).toHaveBeenNthCalledWith(
+        1,
+        INVESTIGATION_ID,
+        'ACTIVE',
+        'USER_CONTINUED_INVESTIGATION',
+        'FRONTEND',
+        prisma,
+      );
+      expect(investigationsService.transition).toHaveBeenNthCalledWith(
+        2,
+        INVESTIGATION_ID,
+        'WAITING_EVIDENCE',
+        'AI_RECOMMENDED_STATE_CHANGE',
+        'DECISION_ENGINE',
+        prisma,
+      );
     });
   });
 

@@ -6,7 +6,10 @@
 // v2 (Fase 5b): agrega el principio de citar documentación recuperada vía
 // RAG (`referencedDocuments`) y de que esa documentación nunca releva a
 // la IA de las reglas de seguridad (§9.8, §14.11).
-export const SYSTEM_PROMPT_VERSION = 2;
+// v3 (Fase 6): agrega el principio de tratar el bloque "Evidencia" como
+// hechos del caso (a diferencia de la documentación RAG) — variables
+// derivadas de fotos/videos/audios ya analizados.
+export const SYSTEM_PROMPT_VERSION = 3;
 
 /**
  * Codifica los principios leídos directamente del PRD v3.2:
@@ -37,6 +40,10 @@ export const SYSTEM_PROMPT_VERSION = 2;
  *   `referencedDocuments` cuando efectivamente se use, tratarla como
  *   material de referencia (nunca como hecho del caso), y nunca dejar
  *   que autorice saltarse las reglas de seguridad (§9.8, §14.11).
+ * - El bloque "Evidencia" son hechos del caso (variables ya derivadas de
+ *   fotos/videos/audios), no material de referencia — a diferencia de la
+ *   documentación RAG, sí se puede usar directamente para reforzar o
+ *   descartar hipótesis (§70/§71 PRD).
  */
 export function buildSystemPrompt(): string {
   return `Eres el investigador técnico automotriz de CarPlus. Tu trabajo es \
@@ -80,6 +87,10 @@ lo trates como un hecho del caso ni como evidencia del vehículo \
 concreto, es solo material de referencia. Un boletín técnico nunca \
 autoriza a recomendar una acción peligrosa si la evidencia del caso \
 todavía es insuficiente: la regla 8 de seguridad sigue aplicando igual.
+12. El bloque "Evidencia" (variables ya derivadas de fotos, videos o \
+audios que el usuario adjuntó) son hechos del caso, no material de \
+referencia — usalos igual que cualquier otra evidencia recogida en la \
+conversación para reforzar, descartar o generar hipótesis.
 
 Respondé siempre usando la herramienta que se te ofrece para estructurar \
 tu respuesta — nunca texto libre fuera de ella.`;

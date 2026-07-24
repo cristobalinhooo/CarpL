@@ -44,16 +44,26 @@ export interface AiRetrievedDocument {
   content: string;
 }
 
-/**
- * Sin bloque de evidencia todavía — Evidence es Fase 6. Se agrega a este
- * contrato cuando exista.
- */
+/** Resumen de una `Evidence` ya registrada (§14.4: "Evidence | Metadatos
+ * y análisis normalizado por archivo") — a diferencia de
+ * `retrievedDocumentation` (RAG), esto son hechos del caso, no material
+ * de referencia. `variables`/`summary` vacíos mientras el análisis
+ * automático no haya corrido (siempre el caso para VIDEO/AUDIO en esta
+ * fase — Claude solo analiza IMAGE). */
+export interface AiEvidenceSummary {
+  evidenceType: 'IMAGE' | 'VIDEO' | 'AUDIO';
+  description: string | null;
+  variables: string[];
+  summary: string | null;
+}
+
 export interface AiConversationContext {
   vehicle: AiVehicleContext;
   problem: { title: string; description: string };
   conversation: AiConversationMessage[];
   hypotheses: AiHypothesisContext[];
   retrievedDocumentation: AiRetrievedDocument[];
+  evidence: AiEvidenceSummary[];
 }
 
 export interface AiHypothesisUpdate {
@@ -88,10 +98,28 @@ export interface AiStructuredResponse {
   recommendedState: AiRecommendedState;
 }
 
+/** Solo `IMAGE` en esta fase (§9.8, D-011): Claude no procesa video ni
+ * audio nativamente — el tipo lo refleja en vez de aceptar los tres y
+ * fallar en runtime. */
+export interface AiEvidenceAnalysisInput {
+  evidenceType: 'IMAGE';
+  description: string | null;
+  mimeType: string;
+  fileBase64: string;
+}
+
+export interface AiEvidenceAnalysisResult {
+  variables: string[];
+  summary: string;
+}
+
 /** El dominio solo conoce esta interfaz, nunca un proveedor concreto. */
 export interface AiProvider {
   readonly name: string;
   generateResponse(
     context: AiConversationContext,
   ): Promise<AiStructuredResponse>;
+  analyzeEvidence(
+    input: AiEvidenceAnalysisInput,
+  ): Promise<AiEvidenceAnalysisResult>;
 }

@@ -15,6 +15,7 @@ function fakeContext(): AiConversationContext {
     conversation: [{ sender: 'USER', message: 'Frena raro' }],
     hypotheses: [],
     retrievedDocumentation: [],
+    evidence: [],
   };
 }
 
@@ -174,5 +175,102 @@ describe('ClaudeAiProvider', () => {
     });
 
     expect(result.referencedDocuments).toEqual(['chunk-1']);
+  });
+
+  describe('analyzeEvidence', () => {
+    function validEvidenceInput() {
+      return {
+        evidenceType: 'IMAGE' as const,
+        description: 'Foto del motor',
+        mimeType: 'image/jpeg',
+        fileBase64: 'ZmFrZS1ieXRlcw==',
+      };
+    }
+
+    function validAnalysisToolInput() {
+      return {
+        variables: ['Luz Check Engine encendida'],
+        summary: 'Se observa la luz de check engine encendida.',
+      };
+    }
+
+    it('arma el mensaje con bloque de imagen en base64 y tool_choice forzado', async () => {
+      client.messages.create.mockResolvedValue({
+        content: [
+          {
+            type: 'tool_use',
+            id: 't1',
+            name: 'submit_evidence_analysis',
+            input: validAnalysisToolInput(),
+          },
+        ],
+      });
+
+      const result = await provider.analyzeEvidence(validEvidenceInput());
+
+      expect(client.messages.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'claude-sonnet-5',
+          tool_choice: { type: 'tool', name: 'submit_evidence_analysis' },
+          messages: [
+            expect.objectContaining({
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: 'image/jpeg',
+                    data: 'ZmFrZS1ieXRlcw==',
+                  },
+                },
+                expect.objectContaining({ type: 'text' }),
+              ],
+            }),
+          ],
+        }),
+      );
+      expect(result.variables).toEqual(['Luz Check Engine encendida']);
+      expect(result.summary).toBe(
+        'Se observa la luz de check engine encendida.',
+      );
+    });
+
+    it('rechaza con ServiceUnavailableException si el mime-type de imagen no es soportado por Claude', async () => {
+      await expect(
+        provider.analyzeEvidence({
+          ...validEvidenceInput(),
+          mimeType: 'image/tiff',
+        }),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(client.messages.create).not.toHaveBeenCalled();
+    });
+
+    it('rechaza con ServiceUnavailableException si no hay bloque tool_use', async () => {
+      client.messages.create.mockResolvedValue({
+        content: [{ type: 'text', text: 'no debería pasar esto' }],
+      });
+
+      await expect(
+        provider.analyzeEvidence(validEvidenceInput()),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it('rechaza con ServiceUnavailableException si la salida no matchea el schema', async () => {
+      client.messages.create.mockResolvedValue({
+        content: [
+          {
+            type: 'tool_use',
+            id: 't1',
+            name: 'submit_evidence_analysis',
+            input: { variables: 'no-es-un-array', summary: 'x' },
+          },
+        ],
+      });
+
+      await expect(
+        provider.analyzeEvidence(validEvidenceInput()),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
   });
 });

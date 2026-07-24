@@ -59,9 +59,17 @@ export class MessagesService {
       investigationId,
     );
 
-    if (investigation.currentStatus !== 'ACTIVE') {
+    // D-012: `READY_TO_ANALYZE` también acepta mensajes — un mensaje nuevo
+    // es la manifestación concreta de "el usuario prefiere seguir
+    // investigando" (transición ya definida en D-002, nunca disparada
+    // hasta ahora). `WAITING_EVIDENCE` sigue bloqueando mensajes: ese
+    // estado existe para exigir evidencia, no conversación.
+    if (
+      investigation.currentStatus !== 'ACTIVE' &&
+      investigation.currentStatus !== 'READY_TO_ANALYZE'
+    ) {
       throw new ConflictException(
-        'Solo se pueden enviar mensajes a una investigación en curso (Active)',
+        'Solo se pueden enviar mensajes a una investigación en curso (Active) o lista para analizar (Ready to Analyze)',
       );
     }
 
@@ -81,6 +89,15 @@ export class MessagesService {
     const activeHypotheses = await this.prisma.hypothesis.findMany({
       where: { investigationId, status: 'ACTIVE' },
       orderBy: { createdAt: 'asc' },
+    });
+
+    // Evidencia ya registrada (§14.4 "Evidence context") — hechos del
+    // caso, no material de referencia (a diferencia de RAG). Las
+    // variables quedan vacías mientras el job ANALYZE_EVIDENCE no haya
+    // corrido (siempre el caso para VIDEO/AUDIO en esta fase, D-011).
+    const evidenceList = await this.prisma.evidence.findMany({
+      where: { investigationId },
+      orderBy: { uploadedAt: 'asc' },
     });
 
     // Construida a partir del contexto técnico y conversacional (§9.8) —
@@ -131,6 +148,18 @@ export class MessagesService {
         documentTitle: c.documentTitle,
         content: c.content,
       })),
+      evidence: evidenceList.map((e) => {
+        const analysis = e.analysisJson as {
+          variables?: string[];
+          summary?: string;
+        } | null;
+        return {
+          evidenceType: e.evidenceType,
+          description: e.description,
+          variables: analysis?.variables ?? [],
+          summary: analysis?.summary ?? null,
+        };
+      }),
     };
 
     // Sin escrituras a la base de datos antes de este punto: si el
@@ -146,6 +175,26 @@ export class MessagesService {
           message: dto.message,
         },
       });
+
+      // D-012: un mensaje nuevo estando en READY_TO_ANALYZE es "el usuario
+      // prefiere seguir investigando" (D-002) — se transiciona a ACTIVE
+      // acá, antes de evaluar `recommendedState` más abajo. `effectiveStatus`
+      // (no `investigation.currentStatus`, que quedó desactualizado) es
+      // contra lo que se compara esa recomendación: comparar contra el
+      // valor pre-turno intentaría una segunda transición ACTIVE → ACTIVE,
+      // que `canTransition` rechaza (no existe en la tabla), y haría
+      // fallar toda esta transacción.
+      let effectiveStatus = investigation.currentStatus;
+      if (effectiveStatus === 'READY_TO_ANALYZE') {
+        await this.investigationsService.transition(
+          investigationId,
+          'ACTIVE',
+          'USER_CONTINUED_INVESTIGATION',
+          'FRONTEND',
+          tx,
+        );
+        effectiveStatus = 'ACTIVE';
+      }
 
       // §10.7/§14.10 (D-009): `chunkIds` = lo ofrecido al modelo,
       // `referencedChunkIds` = lo que citó realmente según su propia
@@ -185,7 +234,7 @@ export class MessagesService {
         );
       }
 
-      if (aiResponse.recommendedState !== investigation.currentStatus) {
+      if (aiResponse.recommendedState !== effectiveStatus) {
         await this.investigationsService.transition(
           investigationId,
           aiResponse.recommendedState,

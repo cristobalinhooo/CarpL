@@ -7,6 +7,8 @@ import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import type {
   AiConversationContext,
+  AiEvidenceAnalysisInput,
+  AiEvidenceAnalysisResult,
   AiProvider,
   AiStructuredResponse,
 } from '../src/ai/ai-provider.interface';
@@ -50,6 +52,14 @@ class FakeAiProvider implements AiProvider {
       );
     }
     return Promise.resolve(this.nextResponse);
+  }
+
+  analyzeEvidence(
+    _input: AiEvidenceAnalysisInput,
+  ): Promise<AiEvidenceAnalysisResult> {
+    return Promise.reject(
+      new Error('FakeAiProvider: analyzeEvidence no se usa en este e2e'),
+    );
   }
 }
 
@@ -301,6 +311,59 @@ describe('Messages (e2e)', () => {
       newStatus: 'READY_TO_ANALYZE',
       triggeringEvent: 'AI_RECOMMENDED_STATE_CHANGE',
       responsibleComponent: 'DECISION_ENGINE',
+    });
+  });
+
+  it('D-012: un mensaje nuevo estando en READY_TO_ANALYZE transiciona de vuelta a ACTIVE', async () => {
+    const server = app.getHttpServer() as Server;
+    const suffix = Date.now();
+    const token = await signToken(
+      `e2e-msg-d012-${suffix}`,
+      `msg-d012-${suffix}@example.com`,
+    );
+    const investigationId = await createActiveInvestigation(server, token);
+
+    fakeAiProvider.nextResponse = fakeAiResponse({
+      recommendedState: 'READY_TO_ANALYZE',
+    });
+    const firstRes = await request(server)
+      .post(`/api/v1/investigations/${investigationId}/messages`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'Ya te conté todo lo que sé' });
+    expect(firstRes.status).toBe(201);
+
+    const midway = await request(server)
+      .get(`/api/v1/investigations/${investigationId}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect((midway.body as InvestigationResponseBody).currentStatus).toBe(
+      'READY_TO_ANALYZE',
+    );
+
+    // Antes de D-012 esto rechazaba con 409 — READY_TO_ANALYZE no
+    // aceptaba mensajes y no había forma de volver a ACTIVE.
+    fakeAiProvider.nextResponse = fakeAiResponse();
+    const secondRes = await request(server)
+      .post(`/api/v1/investigations/${investigationId}/messages`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'En realidad quiero agregar algo más' });
+    expect(secondRes.status).toBe(201);
+
+    const getRes = await request(server)
+      .get(`/api/v1/investigations/${investigationId}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect((getRes.body as InvestigationResponseBody).currentStatus).toBe(
+      'ACTIVE',
+    );
+
+    const logs = await prisma.investigationStateLog.findMany({
+      where: { investigationId },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(logs.at(-1)).toMatchObject({
+      previousStatus: 'READY_TO_ANALYZE',
+      newStatus: 'ACTIVE',
+      triggeringEvent: 'USER_CONTINUED_INVESTIGATION',
+      responsibleComponent: 'FRONTEND',
     });
   });
 

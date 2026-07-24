@@ -2,14 +2,20 @@ import type { AiConversationContext } from '../ai-provider.interface';
 
 /**
  * Ensambla el bloque de contexto por turno (§14.5: investigation context,
- * retrieved documentation, hypothesis state, task) a partir de datos ya
- * persistidos + el mensaje nuevo del usuario, que `MessagesService`
- * agrega al final de `conversation` en memoria antes de llamar al
- * proveedor — sin bloque de evidencia todavía (Fase 6).
+ * evidence context, retrieved documentation, hypothesis state, task) a
+ * partir de datos ya persistidos + el mensaje nuevo del usuario, que
+ * `MessagesService` agrega al final de `conversation` en memoria antes
+ * de llamar al proveedor.
  */
 export function buildContextPrompt(context: AiConversationContext): string {
-  const { vehicle, problem, conversation, hypotheses, retrievedDocumentation } =
-    context;
+  const {
+    vehicle,
+    problem,
+    conversation,
+    hypotheses,
+    retrievedDocumentation,
+    evidence,
+  } = context;
 
   const vehicleLines = [
     `Marca: ${vehicle.brand}`,
@@ -44,6 +50,18 @@ export function buildContextPrompt(context: AiConversationContext): string {
         )
       : ['(sin documentación recuperada para esta consulta)'];
 
+  const evidenceLines =
+    evidence.length > 0
+      ? evidence.map((e) => {
+          const description = e.description ? ` — ${e.description}` : '';
+          const status =
+            e.variables.length > 0
+              ? `variables: ${e.variables.join(', ')}. ${e.summary ?? ''}`
+              : '(análisis automático no disponible para este tipo todavía)';
+          return `- [${e.evidenceType}]${description} — ${status}`;
+        })
+      : ['(sin evidencia registrada todavía)'];
+
   return [
     '## Vehículo',
     ...vehicleLines,
@@ -57,6 +75,9 @@ export function buildContextPrompt(context: AiConversationContext): string {
     '',
     '## Hipótesis activas',
     ...hypothesesLines,
+    '',
+    '## Evidencia (hechos del caso)',
+    ...evidenceLines,
     '',
     '## Documentación técnica recuperada (material de referencia, no hechos del caso)',
     ...retrievedDocumentationLines,

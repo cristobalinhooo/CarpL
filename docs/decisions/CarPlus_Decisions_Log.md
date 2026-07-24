@@ -507,3 +507,143 @@ seguir usando "CarPlus"/"CarpL" en código y commits sin mencionar
 "Carrum" para no crear inconsistencia a medio camino.
 
 ---
+
+## D-011 — Fase 6 (Evidencia): sin endpoint DELETE, análisis automático solo para IMAGE
+
+**Fecha:** 2026-07-24
+**Estado:** Resuelto — vigente para el MVP (punto 1); nota abierta sin
+resolver (punto 2)
+
+**Contexto:** Al planificar la Fase 6 se leyó directamente el PRD v3.2
+Fase 9 (§65-79, Sistema de Evidencia) y Fase 6 (§26-28, Estados del
+Sistema) en vez de apoyarse solo en el resumen del Technical Spec —
+mismo criterio que encontró los huecos de D-002/D-006/D-008/D-009. Esa
+lectura encontró una discrepancia del mismo tipo, y confirmó una
+limitación real de la IA elegida (Claude) frente a lo que pide §13.6.
+
+**Decisión:**
+
+1. **Sin `DELETE .../evidence/{evidenceId}`.** RSE-008 del PRD dice
+   explícitamente "La eliminación de evidencia por parte del sistema no
+   estará permitida" — sin excepción por estado, a diferencia de
+   `Investigations` (D-006, DELETE acotado a Draft). §77 exige además
+   "impedir modificaciones posteriores al registro" y "permitir su
+   consulta durante toda la vida del caso"; la Figura 10 (UX de la
+   pantalla de evidencia) tampoco describe ninguna acción de eliminar.
+   El Technical Spec (§11.3) igual lista ese endpoint — se resuelve a
+   favor del PRD, no se implementa.
+   **Nota abierta, sin resolver:** qué hacer si un usuario sube evidencia
+   por error (una foto no relacionada, o sensible). No se resuelve en
+   esta fase — queda anotado como consideración de producto para cuando
+   se diseñe la experiencia de frontend de carga de evidencia (posible
+   mecanismo de "ocultar de la vista" que no borre el registro
+   subyacente, en vez de eliminación real).
+2. **Análisis automático real solo para `IMAGE`.** El flujo asíncrono
+   (§13.6) dice que `AI` analiza el archivo (imagen/video/audio) para
+   extraer variables, pero Claude —único `AiProvider` real— no procesa
+   video ni audio nativamente, solo visión de imágenes. Se sigue
+   permitiendo subir evidencia de los 3 tipos (el PRD, Estado 2, lista
+   "Adjuntar imágenes/videos/audios" como acción permitida), pero el job
+   `ANALYZE_EVIDENCE` solo llama de verdad a la IA para `IMAGE`; para
+   `VIDEO`/`AUDIO` el job igual se marca `DONE`, pero `Evidence.analysisJson`
+   queda `null` — limitación documentada, no un bloqueo, mismo patrón que
+   el adaptador nulo de Vehicle Data Provider/RAG: infraestructura real,
+   capacidad diferida hasta que exista un proveedor que soporte esos
+   formatos.
+
+**Consecuencias:** Ver `backend/prisma/schema.prisma` (`Evidence` sin
+`deletedAt`), `backend/src/evidence/` (`EvidenceController` sin ruta
+DELETE, `EvidenceAnalysisJobHandler` con early-return para VIDEO/AUDIO) y
+`backend/src/ai/adapters/claude-ai-provider.ts` (`analyzeEvidence` solo
+acepta `evidenceType: 'IMAGE'` en su tipo de entrada).
+
+---
+
+## D-012 — Fase 6: se implementa la transición `READY_TO_ANALYZE → ACTIVE` (D-002, nunca disparada hasta ahora)
+
+**Fecha:** 2026-07-24
+**Estado:** Resuelto — vigente para el MVP
+
+**Contexto:** El usuario detectó, revisando el plan de la Fase 6, que
+D-002 (Fase 4) había restaurado la transición `Ready to Analyze →
+Active` ("usuario prefiere seguir investigando") en la máquina de
+estados, pero ningún código la disparaba nunca: `MessagesService` (Fase
+5) solo aceptaba `currentStatus === 'ACTIVE'`, y el `EvidenceService`
+recién diseñado para esta fase tampoco la contemplaba. Un caso que
+llegaba a `READY_TO_ANALYZE` quedaba sin forma de volver a `ACTIVE` hasta
+que existiera "Analizar ahora" (Fase 7).
+
+**Decisión:**
+
+1. Se corrige ahora, no se difiere a la Fase 7 — ambos puntos de entrada
+   ya se estaban tocando en esta misma fase (Messages para D-011/RAG,
+   Evidence recién construido), y dejar la asimetría un ciclo más (una
+   vía de "seguir investigando" resuelta, la otra no) generaría más
+   confusión que la corrección misma.
+2. **`MessagesService.sendMessage`** acepta `currentStatus ∈ {ACTIVE,
+   READY_TO_ANALYZE}` (`WAITING_EVIDENCE` sigue bloqueando mensajes: ese
+   estado exige evidencia, no conversación). Si el estado original era
+   `READY_TO_ANALYZE`, la misma transacción del turno transiciona primero
+   a `ACTIVE` (`'USER_CONTINUED_INVESTIGATION'`, `'FRONTEND'`) antes de
+   evaluar `aiResponse.recommendedState`. Detalle de implementación
+   importante, encontrado durante el diseño: esa comparación debe
+   hacerse contra el estado **ya actualizado** (`effectiveStatus`), no
+   contra el valor pre-turno — comparar contra `'READY_TO_ANALYZE'`
+   intentaría una segunda transición `ACTIVE → ACTIVE`, que
+   `canTransition` rechaza (no existe en la tabla), haciendo fallar toda
+   la transacción.
+3. **`EvidenceService.uploadEvidence`** acepta también `READY_TO_ANALYZE`
+   (además de `ACTIVE`/`WAITING_EVIDENCE`), con el mismo
+   `'USER_SUBMITTED_EVIDENCE'` que ya se usaba para el caso
+   `WAITING_EVIDENCE` — "seguir investigando" también puede manifestarse
+   como adjuntar más evidencia, no solo mandar un mensaje.
+
+**Consecuencias:** Ver `backend/src/messages/messages.service.ts`
+(`effectiveStatus`) y `backend/src/evidence/evidence.service.ts`
+(`STATUSES_THAT_RETURN_TO_ACTIVE`). Ambos casos cubiertos por tests
+unitarios y e2e dedicados (turno de mensaje y subida de evidencia desde
+`READY_TO_ANALYZE`).
+
+---
+
+## D-013 — Nota de roadmap para Fase 7 (Informes): piezas probablemente involucradas y tiempo estimado de reparación
+
+**Fecha:** 2026-07-24
+**Estado:** Nota de roadmap — sin implementar; fuera de alcance de la
+Fase 6 (Evidencia), aplica cuando se diseñe la Fase 7 (Informes) en
+detalle
+
+**Contexto:** El usuario adelanta dos campos que deberá incluir
+`report_json` cuando se diseñe la Fase 7, con el mismo criterio de
+certeza que el PRD v3.2 §43 ("Costos Aproximados") ya exige para el
+costo estimado: nunca inventar un valor si no hay información
+suficiente, y siempre acompañar cualquier estimación con la advertencia
+de que depende de variables externas (taller, región, disponibilidad de
+repuestos).
+
+**Decisión:**
+
+1. **Piezas probablemente involucradas por hipótesis**: una lista de
+   piezas/componentes técnicos asociados a cada hipótesis del informe —
+   información técnica (qué pieza), no un precio — al mismo nivel de
+   certeza que las causas probables ya definidas (nunca una lista
+   cerrada/definitiva, sino "probablemente involucradas").
+2. **`estimatedRepairTime`**: mismo campo estructural que
+   `costEstimate` (§43: `available`, `approximateRange`, `disclaimer`)
+   pero en horas de mano de obra en vez de dinero. Mismas reglas exactas
+   de §43: si no hay información suficiente, el informe no inventa un
+   rango; si la hay, se muestra un rango aproximado con advertencia
+   explícita de que depende del taller y la disponibilidad de repuestos
+   — nunca un compromiso de tiempo firme.
+3. Ninguno de los dos se implementa ahora. La Fase 6 (Evidencia, en
+   curso) no los toca. Quedan anotados para el diseño detallado de la
+   Fase 7.
+
+**Consecuencias:** Cuando se diseñe `report_json` en la Fase 7, incluir
+`estimatedRepairTime` junto a `costEstimate` con la misma estructura
+(`available`/`approximateRange`/`disclaimer`), y una lista de piezas
+probablemente involucradas por hipótesis — ambos sujetos a la misma
+regla de "nunca inventar sin evidencia suficiente" que ya rige el resto
+del informe (D-001, PRD §43).
+
+---

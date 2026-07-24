@@ -40,7 +40,13 @@
 // propia salida estructurada — dos señales distintas, ninguna se pierde.
 // Alcance mínimo: el pipeline de ingesta/recuperación es real, pero el
 // corpus queda vacío (sin documentos reales cargados todavía).
-// Las demás entidades (Evidence, Reports, ...) se añaden en sus fases
+// Fase 6 (Evidencia): tablas `evidence`/`attachments` (§10.6). D-011: sin
+// `deletedAt` — el PRD (RSE-008) prohíbe el borrado de evidencia sin
+// excepción, a diferencia de otras entidades. `analysisJson` queda null
+// hasta que el job ANALYZE_EVIDENCE la complete, o para siempre en
+// VIDEO/AUDIO (Claude solo analiza IMAGE en esta fase — limitación
+// documentada, no un bloqueo).
+// Las demás entidades (Reports, ...) se añaden en sus fases
 // correspondientes del roadmap, no de una sola vez aquí.
 
 generator client {
@@ -221,6 +227,7 @@ model Investigation {
   hypotheses          Hypothesis[]
   hypothesisRevisions HypothesisRevision[]
   ragRetrievalLogs    RagRetrievalLog[]
+  evidence            Evidence[]
 
   @@index([userId, createdAt], map: "idx_investigations_user_id_created_at")
   @@index([vehicleId, createdAt], map: "idx_investigations_vehicle_id_created_at")
@@ -411,4 +418,48 @@ model RagRetrievalLog {
 
   @@index([investigationId, retrievedAt], map: "idx_rag_retrieval_log_investigation_id_retrieved_at")
   @@map("rag_retrieval_logs")
+}
+
+enum EvidenceType {
+  IMAGE
+  VIDEO
+  AUDIO
+}
+
+/// Evidencia multimedia del caso (Technical Spec §10.6, PRD §65-79). D-011:
+/// sin `deletedAt` — RSE-008 prohíbe el borrado de evidencia sin
+/// excepción de estado, a diferencia de otras entidades del dominio.
+model Evidence {
+  id              String       @id @default(uuid())
+  investigationId String       @map("investigation_id")
+  evidenceType    EvidenceType @map("evidence_type")
+  description     String?
+  /// Null hasta que el job ANALYZE_EVIDENCE la complete. Para VIDEO/AUDIO
+  /// queda null indefinidamente en esta fase — Claude solo analiza IMAGE
+  /// (limitación documentada, D-011).
+  analysisJson    Json?        @map("analysis_json")
+  uploadedAt      DateTime     @default(now()) @map("uploaded_at")
+
+  investigation Investigation @relation(fields: [investigationId], references: [id])
+  attachments   Attachment[]
+
+  @@index([investigationId, uploadedAt], map: "idx_evidence_investigation_id_uploaded_at")
+  @@map("evidence")
+}
+
+/// Archivo físico asociado a una `Evidence`, en Supabase Storage
+/// (Technical Spec §10.6). `checksum` (SHA-256) para verificar
+/// integridad; el archivo original nunca se modifica (RSE-010).
+model Attachment {
+  id          String   @id @default(uuid())
+  evidenceId  String   @map("evidence_id")
+  storagePath String   @map("storage_path")
+  mimeType    String   @map("mime_type")
+  fileSize    Int      @map("file_size")
+  checksum    String
+  uploadedAt  DateTime @default(now()) @map("uploaded_at")
+
+  evidence Evidence @relation(fields: [evidenceId], references: [id])
+
+  @@map("attachments")
 }

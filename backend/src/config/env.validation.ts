@@ -3,10 +3,9 @@ import * as Joi from 'joi';
 /**
  * Solo se valida estrictamente lo que las fases ya implementadas
  * necesitan para arrancar. Las variables de fases futuras (§17.6 del
- * Technical Spec — AI_*, VEHICLE_DATA_PROVIDER*, RAG_*, MAX_UPLOAD_SIZE,
- * SUPABASE_SERVICE_ROLE_KEY, ...) se documentan en `.env.example` pero no
- * se validan aquí todavía: exigirlas ahora bloquearía el arranque de un
- * backend que aún no las usa.
+ * Technical Spec) se documentan en `.env.example` pero no se validan
+ * aquí todavía: exigirlas ahora bloquearía el arranque de un backend que
+ * aún no las usa.
  */
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
@@ -19,11 +18,13 @@ export const envValidationSchema = Joi.object({
   CORS_ORIGINS: Joi.string().default(''),
   DATABASE_URL: Joi.string().uri().required(),
 
-  // Fase 2 — Identidad. Solo lo que el proxy a Supabase Auth y la
-  // verificación de JWT (JWKS) necesitan; SUPABASE_SERVICE_ROLE_KEY queda
-  // para cuando Storage (fase de Evidencia) lo requiera.
+  // Fase 2 — Identidad (proxy a Supabase Auth + verificación JWT/JWKS).
   SUPABASE_URL: Joi.string().uri().required(),
   SUPABASE_ANON_KEY: Joi.string().required(),
+  // Fase 6 — Storage (Evidencia). Única clave de Supabase Storage
+  // (bypassea RLS a nivel de proyecto, sin variante restringida) — sin
+  // ella el backend no arranca, mismo criterio que AI_API_KEY_CLAUDE.
+  SUPABASE_SERVICE_ROLE_KEY: Joi.string().required(),
 
   // Fase 3b — Vehicle Data Provider. Alcance mínimo: solo existe el
   // adaptador nulo, así que solo "null" es un valor válido por ahora —
@@ -44,4 +45,14 @@ export const envValidationSchema = Joi.object({
   // mismo criterio que VEHICLE_DATA_PROVIDER.
   RAG_EMBEDDING_PROVIDER: Joi.string().valid('null').default('null'),
   RAG_MAX_CHUNKS_PER_QUERY: Joi.number().integer().positive().default(5),
+
+  // Fase 6 — Evidencia. Tamaño de referencia (25 MB) y allowlist de
+  // mime-types por defecto — ambos ajustables sin cambiar código.
+  MAX_UPLOAD_SIZE: Joi.number()
+    .integer()
+    .positive()
+    .default(25 * 1024 * 1024),
+  ALLOWED_MIME_TYPES: Joi.string().default(
+    'image/jpeg,image/png,image/webp,video/mp4,video/quicktime,audio/mpeg,audio/mp4,audio/wav',
+  ),
 });
