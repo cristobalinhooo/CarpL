@@ -20,6 +20,11 @@ export class JobsWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(JobsWorker.name);
   private timer?: NodeJS.Timeout;
   private isPolling = false;
+  // Fase 8, §13.10: expuesto para que `JobsWorkerHealthIndicator` pueda
+  // detectar un worker "silencioso" (proceso vivo pero el timer dejó de
+  // correr) sin que `common/health` conozca ningún detalle interno del
+  // polling.
+  private lastSuccessfulPollAt = new Date();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -47,6 +52,11 @@ export class JobsWorker implements OnModuleInit, OnModuleDestroy {
       for (const job of pendingJobs) {
         await this.processJob(job);
       }
+
+      // Un ciclo que llega hasta acá sin lanzar demuestra que el worker
+      // sigue vivo y pudiendo consultar la tabla `jobs`, más allá de si
+      // había algo pendiente para procesar.
+      this.lastSuccessfulPollAt = new Date();
     } catch (error) {
       this.logger.error(
         'Error en el ciclo de polling de jobs',
@@ -55,6 +65,14 @@ export class JobsWorker implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.isPolling = false;
     }
+  }
+
+  getLastSuccessfulPollAt(): Date {
+    return this.lastSuccessfulPollAt;
+  }
+
+  getPollIntervalMs(): number {
+    return POLL_INTERVAL_MS;
   }
 
   private async processJob(job: Job): Promise<void> {

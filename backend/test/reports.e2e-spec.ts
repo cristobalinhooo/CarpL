@@ -445,6 +445,53 @@ describe('Reports (e2e)', () => {
     expect((currentRes.body as ReportResponseBody).reportVersion).toBe(2);
   }, 20000);
 
+  it('§15.4 Concurrencia: dos "Analizar ahora" simultáneos no producen dos jobs ni report_version duplicado', async () => {
+    const server = app.getHttpServer() as Server;
+    const suffix = Date.now();
+    const token = await signToken(
+      `e2e-report-race-${suffix}`,
+      `report-race-${suffix}@example.com`,
+    );
+    const investigationId = await createInvestigationReadyToAnalyze(
+      server,
+      token,
+    );
+
+    fakeAiProvider.nextReportContent = fakeReportContent({
+      summary: 'Informe generado bajo carrera de dos solicitudes.',
+    });
+
+    // Fase 8: `InvestigationsService.transition` ahora usa
+    // `SELECT ... FOR UPDATE` — sin ese lock de fila, ambas solicitudes
+    // podían leer READY_TO_ANALYZE antes de que cualquiera hiciera
+    // commit y terminar encolando dos jobs GENERATE_REPORT reales (dos
+    // llamadas pagas a la IA) para el mismo caso.
+    const [resA, resB] = await Promise.all([
+      request(server)
+        .post(`/api/v1/investigations/${investigationId}/report`)
+        .set('Authorization', `Bearer ${token}`),
+      request(server)
+        .post(`/api/v1/investigations/${investigationId}/report`)
+        .set('Authorization', `Bearer ${token}`),
+    ]);
+
+    const statuses = [resA.status, resB.status].sort();
+    expect(statuses).toEqual([202, 409]);
+
+    const winner = resA.status === 202 ? resA : resB;
+    const { jobId } = winner.body as RequestAnalysisResponseBody;
+    const job = await waitForJobDone(server, token, jobId);
+    expect(job.status).toBe('DONE');
+
+    const listRes = await request(server)
+      .get(`/api/v1/investigations/${investigationId}/reports`)
+      .set('Authorization', `Bearer ${token}`);
+    const reports = listRes.body as ReportResponseBody[];
+    expect(reports).toHaveLength(1);
+    expect(reports[0].reportVersion).toBe(1);
+    expect(reports[0].isLatest).toBe(true);
+  }, 15000);
+
   it('aísla informes entre usuarios: 404 al intentar consultar un informe ajeno', async () => {
     const server = app.getHttpServer() as Server;
     const suffix = Date.now();

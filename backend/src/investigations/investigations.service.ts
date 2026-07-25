@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type {
@@ -9,6 +10,7 @@ import type {
   Prisma,
   ResponsibleComponent,
 } from '@prisma/client';
+import { pseudonymizeUserId } from '../common/pseudonymize-user-id';
 import { PrismaService } from '../database/prisma.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { CreateInvestigationDto } from './dto/create-investigation.dto';
@@ -29,6 +31,13 @@ const EDITABLE_STATUSES: InvestigationStatus[] = [
 
 @Injectable()
 export class InvestigationsService {
+  // RSEC-006 (PRD Fase 19): "eliminación de información" es uno de los
+  // ejemplos explícitos de acción que debe quedar auditada — a
+  // diferencia de las transiciones de `currentStatus` (ya cubiertas por
+  // `InvestigationStateLog`), el soft-delete de un Draft no toca
+  // `currentStatus` y por eso no dejaba ningún rastro hasta esta fase.
+  private readonly logger = new Logger(InvestigationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly vehiclesService: VehiclesService,
@@ -137,10 +146,18 @@ export class InvestigationsService {
       );
     }
 
-    return this.prisma.investigation.update({
+    const deleted = await this.prisma.investigation.update({
       where: { id: investigationId },
       data: { deletedAt: new Date() },
     });
+
+    this.logger.log({
+      event: 'CASE_SOFT_DELETED',
+      userId: pseudonymizeUserId(userId),
+      investigationId,
+    });
+
+    return deleted;
   }
 
   /**
@@ -155,6 +172,17 @@ export class InvestigationsService {
    * esta transición dentro de su propia transacción atómica, en vez de
    * que `transition` abra la suya. Sin `tx`, el comportamiento es
    * idéntico al de siempre (abre su propia transacción).
+   *
+   * Fase 8, §15.4 (nivel "Concurrencia"): la lectura de `currentStatus`
+   * usa `SELECT ... FOR UPDATE` (no `findUnique`) — sin esto, dos
+   * solicitudes simultáneas de "Analizar ahora" podían leer ambas
+   * `READY_TO_ANALYZE`, pasar ambas la validación de `canTransition`
+   * antes de que cualquiera hiciera commit, y terminar encolando dos
+   * jobs `GENERATE_REPORT` reales (dos llamadas pagas a la IA) para el
+   * mismo caso. Con el lock de fila, la segunda transacción bloquea
+   * hasta que la primera confirma, relee el estado ya actualizado
+   * (`ANALYZING`) y `canTransition('ANALYZING', 'ANALYZING')` rechaza
+   * la segunda transición con 409 — nunca un segundo job.
    */
   async transition(
     investigationId: string,
@@ -164,9 +192,10 @@ export class InvestigationsService {
     tx?: Prisma.TransactionClient,
   ): Promise<Investigation> {
     const run = async (client: Prisma.TransactionClient) => {
-      const investigation = await client.investigation.findUnique({
-        where: { id: investigationId },
-      });
+      const rows = await client.$queryRaw<
+        Array<{ currentStatus: InvestigationStatus }>
+      >`SELECT current_status AS "currentStatus" FROM investigations WHERE id = ${investigationId} FOR UPDATE`;
+      const investigation = rows[0];
 
       if (!investigation) {
         throw new NotFoundException(

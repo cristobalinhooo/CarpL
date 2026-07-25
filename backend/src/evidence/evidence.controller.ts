@@ -13,6 +13,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
@@ -26,6 +27,9 @@ export class EvidenceController {
   constructor(private readonly evidenceService: EvidenceService) {}
 
   // 202 Accepted (§11.3, §13.6): el análisis corre asíncrono vía `jobs`.
+  // Fase 8: cada subida de IMAGE encola una llamada real a Claude Vision
+  // (costo real) — límite propio, más ajustado que el default global.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
   @UseInterceptors(FileInterceptor('file'))

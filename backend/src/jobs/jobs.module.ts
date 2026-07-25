@@ -7,6 +7,6 @@ import { JobsWorker } from './jobs.worker';
 @Module({
   controllers: [JobsController],
   providers: [JobsService, JobsWorker, JobHandlerRegistry],
-  exports: [JobsService, JobHandlerRegistry],
+  exports: [JobsService, JobHandlerRegistry, JobsWorker],
 })
 export class JobsModule {}

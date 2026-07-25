@@ -9,6 +9,7 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
@@ -22,6 +23,11 @@ export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
   // 202 Accepted (§11.3, §13.6): la generación corre asíncrona vía `jobs`.
+  // Fase 8: cada request encola exactamente una llamada real a
+  // generateReport() (costo real) — límite propio, naturalmente bajo
+  // porque "Analizar ahora" es infrecuente por diseño (una o dos veces
+  // por investigación).
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('report')
   @HttpCode(HttpStatus.ACCEPTED)
   requestAnalysis(

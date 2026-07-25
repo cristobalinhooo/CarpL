@@ -10,6 +10,7 @@ import {
   Post,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Vehicle } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
@@ -39,6 +40,11 @@ export class VehiclesController {
   // `NOT_FOUND` son 200 (la ausencia de datos no es un error del recurso,
   // §11.4-11.6); `PROVIDER_ERROR` es la única rama que se mapea a un
   // error HTTP real, aunque el adaptador nulo nunca la use.
+  // Fase 8, §11.7: rate limiting específico exigido explícitamente, sin
+  // costo real todavía (adaptador nulo) pero preconfigurado igual — mismo
+  // criterio que el propio adaptador (protección lista desde ahora,
+  // capacidad real llega después).
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @Post('lookup-by-plate')
   async lookupByPlate(

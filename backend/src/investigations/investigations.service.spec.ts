@@ -16,6 +16,7 @@ interface FakePrisma {
     create: jest.Mock;
   };
   $transaction: jest.Mock;
+  $queryRaw: jest.Mock;
 }
 
 const OWNER_ID = 'user-1';
@@ -61,6 +62,10 @@ function createFakePrisma(): FakePrisma {
   prisma.$transaction = jest.fn((callback: (tx: FakePrisma) => unknown) =>
     callback(prisma),
   );
+  // `transition()` usa `SELECT ... FOR UPDATE` (Fase 8, protección de
+  // concurrencia) en vez de `findUnique` — el fake solo necesita
+  // devolver `[{ currentStatus }]`, configurado por cada test.
+  prisma.$queryRaw = jest.fn();
 
   return prisma;
 }
@@ -198,7 +203,7 @@ describe('InvestigationsService', () => {
     it('transiciona Draft → Active y registra el log', async () => {
       const draft = fakeInvestigation({ currentStatus: 'DRAFT' });
       prisma.investigation.findFirst.mockResolvedValue(draft);
-      prisma.investigation.findUnique.mockResolvedValue(draft);
+      prisma.$queryRaw.mockResolvedValue([{ currentStatus: 'DRAFT' }]);
       const active = fakeInvestigation({ currentStatus: 'ACTIVE' });
       prisma.investigation.update.mockResolvedValue(active);
       prisma.investigationStateLog.create.mockResolvedValue({});
@@ -224,7 +229,7 @@ describe('InvestigationsService', () => {
     it('rechaza con 409 si la investigación ya no está en Draft', async () => {
       const active = fakeInvestigation({ currentStatus: 'ACTIVE' });
       prisma.investigation.findFirst.mockResolvedValue(active);
-      prisma.investigation.findUnique.mockResolvedValue(active);
+      prisma.$queryRaw.mockResolvedValue([{ currentStatus: 'ACTIVE' }]);
 
       await expect(
         service.start(OWNER_ID, INVESTIGATION_ID),
@@ -266,7 +271,7 @@ describe('InvestigationsService', () => {
 
   describe('transition', () => {
     it('lanza 404 si la investigación no existe', async () => {
-      prisma.investigation.findUnique.mockResolvedValue(null);
+      prisma.$queryRaw.mockResolvedValue([]);
 
       await expect(
         service.transition('no-existe', 'ACTIVE', 'SOME_EVENT', 'BACKEND'),

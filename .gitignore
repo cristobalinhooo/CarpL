@@ -15,6 +15,10 @@ build/
 # Tests / cobertura
 coverage/
 
+# Reportes generados por el arnés de evaluación del AI Engine (§15.5) —
+# salida de corridas reales contra Claude, no versionada.
+backend/test/ai-eval/report-*.md
+
 # Logs
 *.log
 npm-debug.log*

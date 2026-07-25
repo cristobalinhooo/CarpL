@@ -34,7 +34,7 @@ describe('AuthController', () => {
     forgotPassword: jest.Mock;
     refresh: jest.Mock;
   };
-  let usersService: { create: jest.Mock };
+  let usersService: { create: jest.Mock; findBySupabaseId: jest.Mock };
   let controller: AuthController;
 
   beforeEach(() => {
@@ -45,7 +45,10 @@ describe('AuthController', () => {
       forgotPassword: jest.fn(),
       refresh: jest.fn(),
     };
-    usersService = { create: jest.fn() };
+    usersService = {
+      create: jest.fn().mockResolvedValue({ id: 'user-1' }),
+      findBySupabaseId: jest.fn().mockResolvedValue({ id: 'user-1' }),
+    };
     controller = new AuthController(
       supabaseAuth as unknown as SupabaseAuthService,
       usersService as unknown as UsersService,
@@ -92,7 +95,16 @@ describe('AuthController', () => {
   });
 
   it('logout: reenvía el access token extraído del request, sin DTO', async () => {
-    const result = await controller.logout('raw-access-token');
+    const result = await controller.logout(
+      {
+        id: 'user-1',
+        supabaseAuthId: 'sb-1',
+        email: 'a@a.com',
+        fullName: 'A',
+        profileImage: null,
+      },
+      'raw-access-token',
+    );
 
     expect(supabaseAuth.logout).toHaveBeenCalledWith('raw-access-token');
     expect(result).toEqual({ loggedOut: true });

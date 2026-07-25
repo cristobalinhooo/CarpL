@@ -765,3 +765,59 @@ Investigando`.
 sin corregir en su propio texto — esta bitácora es la fuente de verdad.
 
 ---
+
+## D-016 — Fase 8 (Beta): alcance acotado a endurecimiento backend, sin resolver proveedores pendientes ni desplegar
+
+**Fecha:** 2026-07-24
+**Estado:** Resuelto — vigente para el MVP
+
+**Contexto:** El Technical Spec v2.1 marca como P1 ("necesario para beta
+utilizable") la integración real de Vehicle Data Provider, un corpus
+RAG inicial, y PDF — los tres con alcance mínimo por decisiones de
+negocio/proveedor no resueltas (Fase 3b, Fase 5b, D-014). El Technical
+Spec §12/§20 y D-007 (beta privada vía Expo/TestFlight) además asumen
+una app móvil existente y un despliegue real a un hosting, ninguno de
+los dos construido todavía (`mobile/` sigue vacío; el proyecto nunca se
+desplegó fuera de Docker local). Se confirmó con el usuario, antes de
+planificar, cómo encarar estas tres tensiones en vez de forzar una
+resolución dentro de esta fase.
+
+**Decisión:**
+
+1. **Vehicle Data Provider / RAG / PDF**: se mantiene el alcance mínimo
+   ya vigente (adaptador nulo de VDP, corpus RAG vacío, sin PDF, D-014).
+   Fase 8 endurece y prueba lo que ya existe, sin resolver esos
+   proveedores/decisiones de negocio pendientes.
+2. **Alcance móvil**: Fase 8 es **backend-only**. La verificación E2E es
+   vía API directa (supertest/e2e-spec), no a través de una app real. El
+   frontend (`mobile/`) queda para una fase futura separada, no incluida
+   en el roadmap de esta fase.
+3. **Despliegue real**: se **prepara, no se despliega**. El backend
+   queda listo para desplegar (`backend/DEPLOYMENT.md`: checklist de
+   variables de entorno, migraciones, healthchecks, forma recomendada
+   de hosting per D-007) pero no se aprovisiona ningún hosting real ni
+   se ejecuta un despliegue — decisión de infraestructura que puede
+   tomarse en un paso aparte, más corto, una vez que el código esté
+   listo.
+4. **RSEC-006 (PRD Fase 19, auditoría de "toda acción relevante")** se
+   satisface vía logs JSON estructurados enriquecidos (`userId`
+   pseudonimizado + `investigationId` en cada línea, más eventos
+   explícitos `USER_LOGIN`/`USER_LOGOUT`/`USER_REGISTERED`/
+   `CASE_SOFT_DELETED`) — no se crea una tabla de auditoría nueva. Los
+   logs estructurados ya son, por definición propia del Technical Spec
+   (§13.10), la señal mínima exigida.
+
+**Consecuencias:** "Beta" para este proyecto se acota a seguridad
+(rate limiting, `helmet`, logs enriquecidos), rendimiento (prueba de
+concurrencia §15.4 — ver también la corrección de
+`InvestigationsService.transition` a `SELECT ... FOR UPDATE`,
+descubierta al escribir esa prueba), observabilidad (`/health/ready`
+extendido con `pgvector`/worker de `jobs`), el arnés de evaluación del
+AI Engine (§15.5, `test/ai-eval/`), y la formalización de los ADR
+pendientes asociados a fases ya cerradas (`docs/adr/`) — todo
+verificable localmente y en CI, sin infraestructura nueva ni un segundo
+proveedor de IA/VDP/RAG. ADR-010 (Vehicle Data Provider) queda
+explícitamente diferido, no cerrado, hasta que se tome esa decisión de
+negocio.
+
+---

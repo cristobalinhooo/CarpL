@@ -24,10 +24,18 @@ import { VehiclesModule } from './vehicles/vehicles.module';
     }),
     LoggerModule,
     DatabaseModule,
-    CommonModule,
-    JobsModule,
+    // AuthModule (registra el guard global que puebla `request.user`)
+    // debe importarse antes que CommonModule (registra el guard global
+    // de rate limiting, que trackea por `request.user.id` cuando existe,
+    // Fase 8) — el orden de import determina el orden de ejecución de
+    // guards globales registrados vía APP_GUARD; sin este orden,
+    // `UserThrottlerGuard.getTracker()` correría antes de que
+    // `SupabaseJwtGuard` poblara `request.user`, y el rate limiting
+    // "por usuario" caería siempre al fallback por IP.
     UsersModule,
     AuthModule,
+    CommonModule,
+    JobsModule,
     VehiclesModule,
     InvestigationsModule,
     MessagesModule,
