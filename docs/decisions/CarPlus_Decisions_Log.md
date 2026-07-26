@@ -973,3 +973,80 @@ paginación todavía) — Historial trae la lista completa en una sola
 llamada.
 
 ---
+
+## D-020 — Frontend Fase 5 (Chat): evidencia incluida completa (corrección de alcance), apertura sin IA fantasma, y bug real de subida corregido en vivo
+
+**Fecha:** 2026-07-26
+**Estado:** Resuelto — vigente para el MVP
+
+**Contexto:** El plan inicial de esta fase excluía adjuntar evidencia
+(Foto/Video/Audio), tratándolo como una fase futura por el mismo
+criterio que VDP/RAG (adaptador nulo, proveedor externo pendiente). El
+usuario corrigió esto antes de implementar: a diferencia de VDP/RAG,
+`evidence/` ya es un módulo real del backend, construido y probado
+desde su propia Fase 6 — no hay ninguna razón de peso para diferirlo.
+Se corrigió el plan e incluyó completo.
+
+**Decisión:**
+
+1. **Evidencia (Foto/Video/Audio) se construye completa esta fase**,
+   conectando contra `POST`/`GET /investigations/{id}/evidence`
+   además de `messages/`. Solo "Analizar ahora" queda fuera (depende
+   de `reports/` y de una pantalla de Informe que no existe todavía).
+2. **La Figura 9 muestra a la IA hablando primero, pero el backend no
+   puede originar un mensaje sin uno previo del usuario** — la
+   descripción inicial (Fase 4) se muestra como una tarjeta fija
+   arriba de la conversación, nunca como un mensaje de chat. Ningún
+   mensaje con costo real se envía sin que el usuario escriba y
+   confirme el suyo primero.
+3. **Sin botones de respuesta rápida ni "Por qué preguntamos esto"** —
+   el schema de salida de la IA (§14.10) no tiene ningún campo que los
+   respalde, solo `assistantMessage`/`question` de texto libre.
+4. **`isSafetyStop`/`safetyMessage` se renderizan por primera vez**
+   (persistidos desde la Fase 5 original del backend, sin ninguna UI
+   hasta ahora) — estilo de advertencia, sin bloquear más mensajes: el
+   backend mismo no define ninguna acción especial ahí todavía.
+5. **Reglas de bloqueo distintas para mensajes y evidencia**, réplica
+   exacta de `MessagesService`/`EvidenceService`: `WAITING_EVIDENCE`
+   bloquea mensajes pero no adjuntar (confirmado en vivo).
+6. **`expo-av` está deprecado en Expo SDK 57** — la grabación de audio
+   usa `expo-audio` (`useAudioRecorder`), confirmado contra la
+   documentación versionada real (`docs.expo.dev/versions/v57.0.0`)
+   antes de escribir el código, por instrucción de `mobile/AGENTS.md`.
+7. **Bug real encontrado y corregido durante la verificación en
+   vivo:** la primera subida de evidencia a través de la UI real
+   fallaba silenciosamente (el backend nunca recibía el archivo). La
+   causa: `src/api/evidence.ts` armaba el `FormData` con el patrón
+   `{uri, type, name}` — un atajo que solo entiende el `FormData`
+   nativo de React Native (iOS/Android); en web (`react-native-web`),
+   `FormData` es la implementación real del DOM y lo ignora,
+   produciendo un multipart sin archivo. Confirmado con un `fetch()`
+   directo (que sí funcionó, usando un `File` real) antes de
+   diagnosticar la causa exacta en el código propio. Corregido
+   convirtiendo la URI a un `Blob` real (`fetch(uri).then(r =>
+   r.blob())`) antes de adjuntarlo — funciona igual en ambas
+   plataformas, ya que Expo también resuelve URIs `file://` locales
+   con `fetch`. Reverificado en vivo tras el fix (una foto real,
+   analizada correctamente por Claude Vision).
+8. **Hallazgo aparte, no de esta fase — anotado para más adelante:**
+   `EvidenceService.findByInvestigation` (backend) falla con 500
+   entero (`No se pudo generar la URL firmada: Object not found`) si
+   **cualquier** `Attachment` de la investigación referencia un
+   objeto que ya no existe en Supabase Storage — un solo adjunto
+   corrupto tira abajo la lista completa de evidencia, en vez de
+   omitir u omitir con una señal solo ese item. Descubierto al insertar
+   una fila de prueba vía Prisma sin su objeto real en Storage
+   (limpiada después) — no es un escenario alcanzable por el flujo real
+   de subida actual (Storage se sube antes que la fila de DB), pero
+   vale la pena una revisión de robustez futura del backend.
+
+**Consecuencias:** Ver `mobile/src/api/evidence.ts` (`upload`,
+corregido), `mobile/src/app/investigation/[id]/chat.tsx` (línea de
+tiempo combinada, reglas de bloqueo), `mobile/src/components/
+chat-bubble.tsx` (`isSafetyStop`), `mobile/src/components/
+attachment-menu.tsx` (`expo-image-picker`/`expo-audio`). El hallazgo 8
+queda como nota de robustez para `backend/src/evidence/
+evidence.service.ts`, no bloqueante, no resuelto en esta fase
+(frontend-only).
+
+---

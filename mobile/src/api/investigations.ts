@@ -43,6 +43,10 @@ export function findAll(accessToken: string): Promise<Investigation[]> {
   return apiFetch('/investigations', { accessToken });
 }
 
+export function findOne(id: string, accessToken: string): Promise<Investigation> {
+  return apiFetch(`/investigations/${id}`, { accessToken });
+}
+
 export function start(id: string, accessToken: string): Promise<Investigation> {
   return apiFetch(`/investigations/${id}/start`, { method: 'POST', accessToken });
 }

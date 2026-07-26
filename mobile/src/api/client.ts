@@ -27,6 +27,10 @@ export class NetworkError extends Error {
 
 interface ApiFetchOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  /** Un `FormData` se manda tal cual (Fase 5, subida de evidencia):
+   *  sin serializar y sin fijar `Content-Type`, para que `fetch` arme
+   *  el boundary multipart correcto solo. Cualquier otro valor sigue
+   *  el camino JSON de siempre. */
   body?: unknown;
   /** Presente solo en rutas protegidas (p. ej. `/auth/logout`). */
   accessToken?: string;
@@ -56,17 +60,23 @@ export async function apiFetch<T>(
     );
   }
 
+  const isFormData = options.body instanceof FormData;
+
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       method: options.method ?? 'GET',
       headers: {
-        'Content-Type': 'application/json',
+        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
         ...(options.accessToken
           ? { Authorization: `Bearer ${options.accessToken}` }
           : {}),
       },
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body: isFormData
+        ? (options.body as FormData)
+        : options.body !== undefined
+          ? JSON.stringify(options.body)
+          : undefined,
     });
   } catch {
     throw new NetworkError();

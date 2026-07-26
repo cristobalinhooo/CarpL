@@ -49,10 +49,26 @@ usuario a medida que avanza.
   cruza en el cliente contra `GET /vehicles` porque `GET
   /investigations` no lo incluye. Sin evidencia inicial (Foto/Vídeo/
   Audio de la Figura 8) todavía — módulo Evidencia, fase futura.
+- **Fase 5 (Chat)**: Chat de investigación ya habla contra `messages/`
+  **y `evidence/`** (`POST`/`GET .../messages`, `POST`/`GET
+  .../evidence` — a diferencia de VDP/RAG, `evidence/` ya es un módulo
+  real desde su propia Fase 6 del backend, por eso se incluyó completo
+  acá). La descripción inicial (Fase 4) se muestra como tarjeta fija,
+  nunca como un mensaje de IA fantasma — el backend no puede originar
+  un mensaje sin uno previo del usuario. Mensajes y evidencia comparten
+  una sola línea de tiempo cronológica. `isSafetyStop`/`safetyMessage`
+  (persistidos desde la Fase 5 original del backend) se muestran por
+  primera vez, con estilo de advertencia. El envío de mensajes y
+  adjuntar evidencia se deshabilitan según reglas distintas (réplica
+  exacta de las validaciones del backend) — `WAITING_EVIDENCE` bloquea
+  mensajes pero no adjuntos. Sin "Ver caso" ni "Analizar ahora"
+  (pantallas/módulos de fases futuras). Fotos/videos vía
+  `expo-image-picker`, audio grabado en la app vía **`expo-audio`**
+  (`expo-av` está deprecado en SDK 57, no se usa).
 
 Los módulos restantes (pantallas con contenido y lógica real más allá
-de Auth/Vehículos/Investigaciones: evidencia, chat, informe) se
-añaden fase a fase — no existen todavía por diseño.
+de Auth/Vehículos/Investigaciones/Chat: informe) se añaden fase a
+fase — no existen todavía por diseño.
 
 ## Estructura
 
@@ -87,25 +103,30 @@ mobile/
 │   │       ├── _layout.tsx     # no route group: el id sí es información real
 │   │       ├── new.tsx         # Nueva investigación — real (Fase 4), Figura 8
 │   │       └── [id]/
-│   │           ├── chat.tsx    # placeholder (destino real desde Fase 4, contenido futuro)
-│   │           ├── evidence.tsx
+│   │           ├── chat.tsx    # Chat — real (Fase 5), Figura 9 (mensajes + evidencia)
+│   │           ├── evidence.tsx  # placeholder (pantalla propia de evidencia, fase futura)
 │   │           └── report.tsx  # placeholder (destino real desde Fase 4, contenido futuro)
 │   ├── theme/                  # Tokens de diseño (Primitivos + Semánticos,
 │   │   ├── colors.ts           # Figura 17) — objeto estático exportado, sin
 │   │   ├── typography.ts       # Context/Provider (no hay dark mode pedido
 │   │   ├── spacing.ts          # todavía)
 │   │   └── index.ts
-│   ├── api/                    # Cliente HTTP contra el backend (Fase 2/3/4)
-│   │   ├── client.ts           # apiFetch<T> genérico + ApiError/NetworkError
+│   ├── api/                    # Cliente HTTP contra el backend (Fase 2/3/4/5)
+│   │   ├── client.ts           # apiFetch<T> genérico + ApiError/NetworkError,
+│   │   │                       # soporta FormData crudo (Fase 5, subida de evidencia)
 │   │   ├── auth.ts             # register/login/forgotPassword/refresh/logout
 │   │   ├── vehicles.ts         # create/findAll/lookupByPlate (Fase 3)
-│   │   └── investigations.ts   # create/findAll/start (Fase 4)
+│   │   ├── investigations.ts   # create/findAll/start/findOne (Fase 4/5)
+│   │   ├── messages.ts         # send/findAll (Fase 5)
+│   │   └── evidence.ts         # upload/findAll (Fase 5)
 │   ├── services/                # Acceso a APIs del dispositivo (Fase 2)
 │   │   └── session-storage.ts  # SecureStore (nativo) / localStorage (web)
-│   ├── hooks/                   # Estado compartido (Fase 2/3/4)
+│   ├── hooks/                   # Estado compartido (Fase 2/3/4/5)
 │   │   ├── use-session.tsx     # SessionProvider + useSession()
 │   │   ├── use-vehicles-api.ts # wrapper de api/vehicles.ts + logout automático en 401
-│   │   └── use-investigations-api.ts  # ídem para api/investigations.ts
+│   │   ├── use-investigations-api.ts  # ídem para api/investigations.ts
+│   │   ├── use-messages-api.ts  # ídem para api/messages.ts
+│   │   └── use-evidence-api.ts  # ídem para api/evidence.ts
 │   ├── constants/                # Datos estáticos sin backend real detrás (Fase 3)
 │   │   └── vehicle-brands.ts   # marcas para el autocompletado de "Marca", no un catálogo
 │   └── components/              # Compartidos entre pantallas
@@ -115,7 +136,10 @@ mobile/
 │       ├── brand-autocomplete-field.tsx  # Marca con sugerencias no bloqueantes (Fase 3)
 │       ├── empty-state.tsx     # patrón Figura 23, reutilizable (Fase 3)
 │       ├── vehicle-card.tsx    # presentación compartida de un vehículo (Fase 3)
-│       └── vehicle-selector.tsx  # dropdown de vehículo real (Fase 4, Figura 8)
+│       ├── vehicle-selector.tsx  # dropdown de vehículo real (Fase 4, Figura 8)
+│       ├── chat-bubble.tsx     # burbuja de mensaje, estilo propio si isSafetyStop (Fase 5)
+│       ├── evidence-card.tsx   # evidencia en la línea de tiempo del chat (Fase 5)
+│       └── attachment-menu.tsx  # adjuntar Foto/Video/Audio (Fase 5)
 ├── assets/                      # Íconos/splash (branding real pendiente)
 ├── app.json
 ├── package.json
@@ -178,6 +202,9 @@ componentes/features reales que se agregan en fases futuras.
 - El backend corriendo localmente (`backend/`, Docker Postgres + Fase
   2 en adelante) — desde Fase 2, Auth ya no funciona contra nada
   simulado.
+- Desde Fase 5, adjuntar evidencia pide permisos de cámara/galería
+  (`expo-image-picker`) y micrófono (`expo-audio`) — textos de permiso
+  configurados en `app.json` (`plugins`).
 
 ## Arranque local
 

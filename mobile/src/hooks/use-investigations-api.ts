@@ -48,5 +48,11 @@ export function useInvestigationsApi() {
     [call],
   );
 
-  return { findAll, create, start };
+  const findOne = useCallback(
+    (id: string): Promise<Investigation> =>
+      call((accessToken) => investigationsApi.findOne(id, accessToken)),
+    [call],
+  );
+
+  return { findAll, create, start, findOne };
 }

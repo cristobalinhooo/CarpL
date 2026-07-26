@@ -33,7 +33,20 @@
           "imageWidth": 76
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "CarPlus necesita acceso a tus fotos para adjuntar evidencia de tu vehículo.",
+          "cameraPermission": "CarPlus necesita acceso a la cámara para adjuntar evidencia fotográfica de tu vehículo."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "CarPlus necesita acceso al micrófono para grabar el sonido de tu vehículo como evidencia."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
