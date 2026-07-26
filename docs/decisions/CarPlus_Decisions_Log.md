@@ -908,3 +908,68 @@ base de datos, aunque la UI de "Confirmar datos" ya esté lista desde
 esta fase.
 
 ---
+
+## D-019 — Frontend Fase 4 (Investigaciones): título derivado de la descripción, e Historial sigue la Figura 17 real
+
+**Fecha:** 2026-07-26
+**Estado:** Resuelto — vigente para el MVP
+
+**Contexto:** Al planificar la Fase 4 (Nueva investigación, Historial)
+se leyeron directamente Technical Spec §12.3 y §11.3, y se revisaron
+las Figuras 8 y 17 de `docs/design/mockups/` como referencia visual
+real — mismo criterio que fases anteriores. Esa revisión encontró dos
+discrepancias entre el texto del Technical Spec/PRD y los mockups
+reales, confirmadas con el usuario antes de implementar.
+
+**Decisión:**
+
+1. **"Nueva investigación" no tiene un campo "Título" propio — se
+   deriva de la descripción en el cliente.** La Figura 8 solo muestra
+   un campo (Descripción); el título como entrada separada solo
+   aparece en el texto de §12.3 ("Seleccionar vehículo, título y
+   descripción"). La propia regla de validación de esa misma fila
+   dice "no iniciar sin **vehículo ni descripción** válida" — omite
+   título de lo que debe validarse, lo que respalda que no es una
+   entrada propia del usuario. `CreateInvestigationDto.title` sigue
+   siendo obligatorio en el backend (1-200 caracteres): se deriva
+   automáticamente tomando la primera oración de la descripción (o
+   los primeros 60 caracteres con "…" si no hay una oración corta),
+   sin pedírselo al usuario. Ver `deriveTitle()` en
+   `mobile/src/app/investigation/new.tsx`.
+2. **Historial sigue exactamente la Figura 17, no el texto de §12.3/
+   PRD §207.** El mockup real muestra solo fecha + título + vehículo +
+   una etiqueta de estado (Investigando/Informe disponible/Archivado)
+   — sin "nivel de urgencia" ni "versión del informe", que
+   requerirían `reports/` (no nombrado en esta fase) y que además
+   chocarían con D-001 (nunca mostrar confianza cruda). Se construyó
+   exactamente lo que el mockup muestra.
+3. **Bug propio de esta fase, encontrado y corregido durante la
+   verificación en vivo:** en `investigation/new.tsx`, las ramas
+   `loading`/`error`/`empty` no renderizaban `<Stack.Screen
+   options={{title: 'Nueva investigación'}}>` — ese componente solo
+   estaba en el `return` final (la rama con el formulario), así que el
+   header mostraba el nombre crudo del segmento de ruta ("new") en vez
+   del título real mientras la pantalla cargaba, fallaba, o mostraba
+   el estado vacío. Corregido envolviendo cada rama temprana en su
+   propio `<Stack.Screen>` (mismo título repetido), y reverificado en
+   vivo tras el fix.
+4. **"Iniciar investigación" encadena `create` + `start`** en una sola
+   acción (coincide con el propio texto de "Flujo" de la Figura 8:
+   "al iniciar, se crea el caso... y se abre el Chat") — confirmado en
+   vivo que la investigación queda `ACTIVE`, no `DRAFT`, antes de
+   navegar.
+5. **`GET /investigations` no incluye el vehículo relacionado** — el
+   Historial cruza por `vehicleId` contra `GET /vehicles` (Fase 3) en
+   el cliente, sin pedir un `include` nuevo al backend ni una llamada
+   por item.
+
+**Consecuencias:** Ver `mobile/src/app/investigation/new.tsx`
+(`deriveTitle`) y `mobile/src/app/(tabs)/history.tsx` (cruce de
+vehículos, `statusBadge`). Cuando `reports/` se conecte al frontend
+(fase futura), evaluar si Historial debe ampliarse con nivel de
+urgencia/versión de informe — hoy queda deliberadamente fuera. Sin
+paginación real (`GET /investigations` no acepta parámetros de
+paginación todavía) — Historial trae la lista completa en una sola
+llamada.
+
+---

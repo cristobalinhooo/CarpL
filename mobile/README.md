@@ -35,9 +35,23 @@ usuario a medida que avanza.
   simplemente el primero de `GET /vehicles` (ya ordenado por más
   reciente) — no es un campo del backend. Primeras pantallas de datos
   protegidas más allá de logout: un 401 fuerza cierre de sesión.
+- **Fase 4 (Investigaciones)**: Nueva investigación e Historial ya
+  hablan contra `investigations/` (`POST /investigations`, `GET
+  /investigations`, `POST /investigations/{id}/start`, Fase 4 del
+  backend). Nueva investigación no pide un "Título" propio (la Figura
+  8 no lo muestra) — se deriva de la descripción en el cliente, ya que
+  la regla de validación de §12.3 solo exige vehículo+descripción.
+  "Iniciar investigación" crea el caso y lo activa (`start`) en la
+  misma acción antes de abrir el Chat (todavía un placeholder).
+  Historial sigue exactamente la Figura 17 (fecha/título/vehículo/
+  estado) — sin nivel de urgencia ni versión de informe, que
+  dependerían de `reports/` (fase futura); el vehículo de cada item se
+  cruza en el cliente contra `GET /vehicles` porque `GET
+  /investigations` no lo incluye. Sin evidencia inicial (Foto/Vídeo/
+  Audio de la Figura 8) todavía — módulo Evidencia, fase futura.
 
 Los módulos restantes (pantallas con contenido y lógica real más allá
-de Auth/Vehículos: investigaciones, evidencia, chat, informe) se
+de Auth/Vehículos/Investigaciones: evidencia, chat, informe) se
 añaden fase a fase — no existen todavía por diseño.
 
 ## Estructura
@@ -67,29 +81,31 @@ mobile/
 │   │   │   │   ├── index.tsx   # Mis Vehículos — real (Fase 3), Figura 6
 │   │   │   │   ├── add.tsx     # Agregar vehículo — real (Fase 3), Figura 5
 │   │   │   │   └── confirm.tsx # Confirmar datos — real (Fase 3), tras lookup exitoso
-│   │   │   ├── history.tsx     # placeholder
+│   │   │   ├── history.tsx     # Historial — real (Fase 4), Figura 17
 │   │   │   └── profile.tsx     # placeholder + cerrar sesión real (Fase 2)
 │   │   └── investigation/      # Stack de investigación (§12.2) — carpeta normal,
 │   │       ├── _layout.tsx     # no route group: el id sí es información real
-│   │       ├── new.tsx         # de navegación (deep-linkeable a futuro)
+│   │       ├── new.tsx         # Nueva investigación — real (Fase 4), Figura 8
 │   │       └── [id]/
-│   │           ├── chat.tsx
+│   │           ├── chat.tsx    # placeholder (destino real desde Fase 4, contenido futuro)
 │   │           ├── evidence.tsx
-│   │           └── report.tsx
+│   │           └── report.tsx  # placeholder (destino real desde Fase 4, contenido futuro)
 │   ├── theme/                  # Tokens de diseño (Primitivos + Semánticos,
 │   │   ├── colors.ts           # Figura 17) — objeto estático exportado, sin
 │   │   ├── typography.ts       # Context/Provider (no hay dark mode pedido
 │   │   ├── spacing.ts          # todavía)
 │   │   └── index.ts
-│   ├── api/                    # Cliente HTTP contra el backend (Fase 2/3)
+│   ├── api/                    # Cliente HTTP contra el backend (Fase 2/3/4)
 │   │   ├── client.ts           # apiFetch<T> genérico + ApiError/NetworkError
 │   │   ├── auth.ts             # register/login/forgotPassword/refresh/logout
-│   │   └── vehicles.ts         # create/findAll/lookupByPlate (Fase 3)
+│   │   ├── vehicles.ts         # create/findAll/lookupByPlate (Fase 3)
+│   │   └── investigations.ts   # create/findAll/start (Fase 4)
 │   ├── services/                # Acceso a APIs del dispositivo (Fase 2)
 │   │   └── session-storage.ts  # SecureStore (nativo) / localStorage (web)
-│   ├── hooks/                   # Estado compartido (Fase 2/3)
+│   ├── hooks/                   # Estado compartido (Fase 2/3/4)
 │   │   ├── use-session.tsx     # SessionProvider + useSession()
-│   │   └── use-vehicles-api.ts # wrapper de api/vehicles.ts + logout automático en 401
+│   │   ├── use-vehicles-api.ts # wrapper de api/vehicles.ts + logout automático en 401
+│   │   └── use-investigations-api.ts  # ídem para api/investigations.ts
 │   ├── constants/                # Datos estáticos sin backend real detrás (Fase 3)
 │   │   └── vehicle-brands.ts   # marcas para el autocompletado de "Marca", no un catálogo
 │   └── components/              # Compartidos entre pantallas
@@ -98,7 +114,8 @@ mobile/
 │       ├── primary-button.tsx  # botón primario con loading (Fase 2)
 │       ├── brand-autocomplete-field.tsx  # Marca con sugerencias no bloqueantes (Fase 3)
 │       ├── empty-state.tsx     # patrón Figura 23, reutilizable (Fase 3)
-│       └── vehicle-card.tsx    # presentación compartida de un vehículo (Fase 3)
+│       ├── vehicle-card.tsx    # presentación compartida de un vehículo (Fase 3)
+│       └── vehicle-selector.tsx  # dropdown de vehículo real (Fase 4, Figura 8)
 ├── assets/                      # Íconos/splash (branding real pendiente)
 ├── app.json
 ├── package.json
