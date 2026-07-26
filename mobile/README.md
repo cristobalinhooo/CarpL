@@ -14,10 +14,20 @@ usuario a medida que avanza.
   los tokens de diseño (`src/theme/`) basados en el Design System de
   CarPlus (PRD v3.1, capítulo transversal — Figuras 2-4 y 17 de
   `../docs/design/mockups/`).
+- **Fase 2 (Auth)**: primera vez que el frontend habla contra el
+  backend real (`POST /auth/register`, `/login`, `/forgot-password`,
+  `/refresh`, `/logout`, Fase 2 del backend) — `src/api/` (cliente
+  fetch tipado), sesión guardada de forma segura (`expo-secure-store`
+  en iOS/Android, `localStorage` como único fallback en web — sin
+  cifrado ahí, no existe un equivalente al keychain nativo en un
+  navegador) y un guard de rutas real en `_layout.tsx` (no autenticado
+  → Login; autenticado → tabs). Login/Registro/Recuperar contraseña ya
+  son formularios funcionales (Figuras 2-4); cerrar sesión funciona
+  desde el placeholder de Perfil.
 
-Los módulos restantes (Auth real contra Supabase, cliente de API,
-pantallas con contenido y lógica real, evidencia, chat, informe) se
-añaden fase a fase — no existen todavía por diseño.
+Los módulos restantes (pantallas con contenido y lógica real más allá
+de Auth: vehículos, evidencia, chat, informe) se añaden fase a fase —
+no existen todavía por diseño.
 
 ## Estructura
 
@@ -30,20 +40,20 @@ escritos a mano.
 mobile/
 ├── src/
 │   ├── app/                    # Rutas (Expo Router)
-│   │   ├── _layout.tsx         # Root: carga de fuentes (Inter), splash, Stack raíz
-│   │   ├── index.tsx           # Splash — hoy siempre redirige a (tabs) (§12.3;
-│   │   │                       # sin sesión real todavía, eso llega con Auth)
+│   │   ├── _layout.tsx         # Root: fuentes, splash, SessionProvider, guard de rutas
+│   │   ├── index.tsx           # Splash — loading mientras se resuelve la sesión
+│   │   │                       # guardada; el guard de _layout.tsx decide destino (§12.3)
 │   │   ├── (auth)/             # Stack de autenticación (§12.2) — route group,
 │   │   │   ├── _layout.tsx     # no aparece en la URL
-│   │   │   ├── login.tsx
-│   │   │   ├── register.tsx
-│   │   │   └── forgot-password.tsx
+│   │   │   ├── login.tsx       # Formulario real (Fase 2) — Figura 2
+│   │   │   ├── register.tsx    # Formulario real (Fase 2) — Figura 3
+│   │   │   └── forgot-password.tsx  # Formulario real (Fase 2) — Figura 4
 │   │   ├── (tabs)/             # Tabs persistentes (§12.2/12.3) — route group
 │   │   │   ├── _layout.tsx     # Inicio, Vehículos, Historial, Perfil
-│   │   │   ├── index.tsx       # Inicio (Home)
-│   │   │   ├── vehicles.tsx
-│   │   │   ├── history.tsx
-│   │   │   └── profile.tsx
+│   │   │   ├── index.tsx       # Inicio (Home) — placeholder
+│   │   │   ├── vehicles.tsx    # placeholder
+│   │   │   ├── history.tsx     # placeholder
+│   │   │   └── profile.tsx     # placeholder + cerrar sesión real (Fase 2)
 │   │   └── investigation/      # Stack de investigación (§12.2) — carpeta normal,
 │   │       ├── _layout.tsx     # no route group: el id sí es información real
 │   │       ├── new.tsx         # de navegación (deep-linkeable a futuro)
@@ -56,19 +66,47 @@ mobile/
 │   │   ├── typography.ts       # Context/Provider (no hay dark mode pedido
 │   │   ├── spacing.ts          # todavía)
 │   │   └── index.ts
-│   └── components/             # Compartidos entre pantallas — hoy solo
-│       └── screen-placeholder.tsx  # el placeholder de esqueleto
+│   ├── api/                    # Cliente HTTP contra el backend (Fase 2)
+│   │   ├── client.ts           # apiFetch<T> genérico + ApiError/NetworkError
+│   │   └── auth.ts             # register/login/forgotPassword/refresh/logout
+│   ├── services/                # Acceso a APIs del dispositivo (Fase 2)
+│   │   └── session-storage.ts  # SecureStore (nativo) / localStorage (web)
+│   ├── hooks/                   # Estado compartido (Fase 2)
+│   │   └── use-session.tsx     # SessionProvider + useSession()
+│   └── components/              # Compartidos entre pantallas
+│       ├── screen-placeholder.tsx  # placeholder de esqueleto (Fase 1)
+│       ├── form-field.tsx      # campo de formulario (Fase 2, Figuras 2-4)
+│       └── primary-button.tsx  # botón primario con loading (Fase 2)
 ├── assets/                      # Íconos/splash (branding real pendiente)
 ├── app.json
 ├── package.json
 ├── tsconfig.json                # alias `@/*` → `src/*`
-└── eslint.config.js
+├── eslint.config.js
+├── .env.example                 # variables `EXPO_PUBLIC_*` (ver abajo)
+└── .env                         # real, ignorado por git
 ```
 
-`hooks/`, `services/`, `api/`, `types/`, `constants/` (Technical Spec
-§17.1) todavía no existen como carpetas — se crean cuando la fase que
-los necesite (Auth/cliente de API, típicamente) tenga algo real que
-poner ahí, no vacías de antemano.
+`types/`, `constants/` (Technical Spec §17.1) todavía no existen como
+carpetas — se crean cuando una fase futura tenga algo real que poner
+ahí, no vacías de antemano.
+
+## Configuración de entorno
+
+`mobile/.env` (no versionado — copiar desde `.env.example`):
+
+```
+EXPO_PUBLIC_API_URL=http://localhost:3000/api/v1
+```
+
+`EXPO_PUBLIC_*` es el mecanismo estándar de Expo para variables leídas
+en el cliente. El backend ya permite `http://localhost:8081`
+(`CORS_ORIGINS`, `backend/.env.example`) — el puerto por defecto de
+`expo start --web` — no hace falta tocar el backend para probar contra
+la web. Para **emulador Android**, reemplazar `localhost` por
+`10.0.2.2` (alias especial al host); en **simulador iOS**, `localhost`
+funciona igual que en web. El backend debe estar corriendo
+(`backend/`, ver `backend/README.md`) para que Auth (o cualquier
+pantalla futura que hable con la API) funcione.
 
 ## Tokens de diseño
 
@@ -98,11 +136,15 @@ componentes/features reales que se agregan en fases futuras.
 - Node.js 22+
 - Expo Go (dispositivo) o un emulador/simulador, o navegador para
   `--web`
+- El backend corriendo localmente (`backend/`, Docker Postgres + Fase
+  2 en adelante) — desde Fase 2, Auth ya no funciona contra nada
+  simulado.
 
 ## Arranque local
 
 ```bash
 cd mobile
+cp .env.example .env
 npm install
 npx expo start
 ```

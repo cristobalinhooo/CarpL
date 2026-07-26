@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { theme } from '@/theme';
@@ -5,6 +6,11 @@ import { theme } from '@/theme';
 interface ScreenPlaceholderProps {
   title: string;
   note: string;
+  /** Contenido real y funcional dentro de una pantalla por lo demás
+   *  placeholder (p. ej. el botón de cerrar sesión en Perfil, Fase 2)
+   *  — el resto de la pantalla sigue siendo esqueleto de fases
+   *  futuras, esto no. */
+  children?: ReactNode;
 }
 
 /**
@@ -15,11 +21,12 @@ interface ScreenPlaceholderProps {
  * `theme` para que el esqueleto ya se vea consistente con las Figuras
  * 2-4 del Design System, no un placeholder gris genérico.
  */
-export function ScreenPlaceholder({ title, note }: ScreenPlaceholderProps) {
+export function ScreenPlaceholder({ title, note, children }: ScreenPlaceholderProps) {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.note}>{note}</Text>
+      {children}
     </View>
   );
 }

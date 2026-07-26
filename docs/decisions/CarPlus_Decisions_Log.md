@@ -821,3 +821,36 @@ explícitamente diferido, no cerrado, hasta que se tome esa decisión de
 negocio.
 
 ---
+
+## D-017 — Email transaccional: dominio propio (carrum.app) + Resend como SMTP custom de Supabase
+
+**Fecha:** 2026-07-25
+**Estado:** Resuelto — SMTP custom conectado y verificado en vivo
+
+**Contexto:** Durante la verificación en vivo de la Fase 2 del frontend
+(Auth) se confirmó que el mailer por defecto de Supabase tiene un límite
+de envío de emails muy bajo (`over_email_send_rate_limit`, HTTP 429 en
+`/auth/v1/recover`) — se agotó con apenas un par de registros de prueba
+en la misma sesión. Esto afecta tanto a la confirmación de registro
+como a recuperar contraseña, y sería inviable para uso real más allá de
+pruebas puntuales.
+
+**Decisión:** Reemplazar el mailer por defecto por un proveedor SMTP
+propio. Se compró el dominio **carrum.app** (alineado con D-010,
+nombre final del producto), se configuró **Resend**, se agregaron los 4
+registros DNS que pide (DKIM, MX, TXT de SPF, DMARC) en Namecheap, y una
+vez verificado el dominio se conectó Resend como **SMTP custom** dentro
+de Supabase (Authentication → Email → SMTP custom).
+
+**Consecuencias:** Confirmado en vivo tras conectar el SMTP custom:
+`POST /auth/forgot-password` contra un email real responde `200
+{sent:true}` (antes: 503/429 por el límite del mailer por defecto), y
+la misma llamada contra un email inexistente responde idéntico
+`200 {sent:true}` — confirma que el mensaje neutro de la pantalla
+"Recuperar contraseña" (Fase 2 del frontend) es honesto en ambos casos,
+no solo por diseño del código sino verificado contra el proveedor real.
+Como se prevé, no hizo falta ningún cambio de código: el backend ya
+llamaba a `resetPasswordForEmail`/el flujo de confirmación de Supabase
+sin asumir un proveedor de email específico.
+
+---
