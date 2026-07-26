@@ -32,12 +32,21 @@ export default function RootLayout() {
 }
 
 /**
- * Guard de rutas (Fase 2, Auth): no autenticado dentro de `(tabs)`/
- * `investigation` → Login; autenticado dentro de `(auth)` → tabs. El
+ * Guard de rutas (Fase 2, Auth): no autenticado fuera de `(auth)` →
+ * Login; autenticado fuera de `(tabs)`/`investigation` → tabs. El
  * splash nativo se mantiene visible (`preventAutoHideAsync` arriba)
  * hasta que la sesión termina de resolverse desde el storage, no solo
  * hasta que cargan las fuentes — evita un parpadeo de contenido antes
  * de saber a dónde navegar.
+ *
+ * Hallazgo (Fase 3, encontrado en vivo al probar Vehículos): la
+ * condición original solo cubría "autenticado dentro de `(auth)`", no
+ * "autenticado en la raíz `index` sin haber pasado por `(auth)`" — un
+ * usuario ya logueado que abre la app de nuevo (sesión ya en storage)
+ * aterriza directo en `index` (ni `(auth)` ni `(tabs)`) y se quedaba
+ * trabado en el splash para siempre, porque ninguna de las dos ramas
+ * disparaba. Se corrige comparando contra los grupos protegidos
+ * (`(tabs)`/`investigation`) en vez de solo contra `(auth)`.
  */
 function RootNavigator() {
   const { status } = useSession();
@@ -50,9 +59,10 @@ function RootNavigator() {
     void SplashScreen.hideAsync();
 
     const inAuthGroup = segments[0] === '(auth)';
+    const inProtectedGroup = segments[0] === '(tabs)' || segments[0] === 'investigation';
     if (status === 'unauthenticated' && !inAuthGroup) {
       router.replace('/(auth)/login');
-    } else if (status === 'authenticated' && inAuthGroup) {
+    } else if (status === 'authenticated' && !inProtectedGroup) {
       router.replace('/(tabs)');
     }
   }, [status, segments, router]);

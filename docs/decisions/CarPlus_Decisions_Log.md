@@ -854,3 +854,57 @@ llamaba a `resetPasswordForEmail`/el flujo de confirmación de Supabase
 sin asumir un proveedor de email específico.
 
 ---
+
+## D-018 — Frontend Fase 3 (Vehículos): bug de guard corregido en vivo, y gap de `registration_method`/`data_source` documentado
+
+**Fecha:** 2026-07-26
+**Estado:** Punto 1 resuelto; punto 2 nota abierta, no bloqueante
+
+**Contexto:** Durante la verificación en vivo de la Fase 3 del frontend
+(Vehículos: Home, Agregar vehículo, Confirmar datos) aparecieron dos
+hallazgos — uno un bug real ya corregido, el otro un gap del backend
+documentado y diferido (ambos confirmados con el usuario antes de
+proceder).
+
+**Decisión:**
+
+1. **Bug corregido: el guard de rutas (`src/app/_layout.tsx`, Fase 2)
+   dejaba a un usuario ya autenticado trabado en el Splash para
+   siempre.** La condición original solo cubría "autenticado dentro de
+   `(auth)` → tabs"; un usuario ya logueado (sesión persistida) que
+   aterriza directo en la ruta raíz `index` (ni `(auth)` ni `(tabs)` —
+   el caso real de reabrir la app, o refrescar el navegador, ya
+   logueado) no disparaba ninguna rama del guard, y `index.tsx` no
+   tiene redirección propia desde Fase 2. Se corrigió comparando contra
+   los grupos protegidos (`(tabs)`/`investigation`) en vez de solo
+   contra `(auth)`: `status === 'authenticated' && !inProtectedGroup`
+   → redirige a `(tabs)`. Confirmado en vivo: un reload completo con
+   sesión guardada ahora carga Home correctamente. Encontrado y
+   corregido dentro de esta fase aunque el archivo pertenece a la Fase
+   2, con aprobación explícita del usuario antes de tocarlo.
+2. **Gap sin resolver, no bloqueante:** el Technical Spec §13.5 punto 6
+   dice que al confirmar un vehículo desde patente, `Vehicles` debe
+   persistir el registro con `registration_method`/`data_source`/
+   `data_synced_at` reales. Pero ni `CreateVehicleDto` ni
+   `VehiclesService.create()` los aceptan o setean — todo vehículo
+   creado (manual o vía "Confirmar datos") queda con
+   `registrationMethod: MANUAL` (default de Prisma) y
+   `dataSource`/`dataSyncedAt` siempre `null`, sin importar el origen
+   real. Hoy es inobservable: el adaptador nulo de `vehicle-data-provider`
+   nunca produce un `SUCCESS` real que confirmar, así que el camino de
+   "Confirmar datos" (`(tabs)/vehicles/confirm.tsx`) nunca se alcanza en
+   la práctica. No se resuelve en esta fase (frontend-only) — queda
+   para cuando se implemente un proveedor real de datos vehiculares
+   (Fase 3b) y haya que extender `CreateVehicleDto`/`VehiclesService`
+   del backend para aceptar y persistir esos tres campos.
+
+**Consecuencias:** Ver `mobile/src/app/_layout.tsx` (guard corregido).
+Cuando se resuelva la Fase 3b (proveedor real de VDP), extender
+`backend/src/vehicles/dto/create-vehicle.dto.ts` y
+`VehiclesService.create()` para aceptar `registrationMethod`/
+`dataSource`/`dataSyncedAt` desde el flujo de confirmación — sin eso,
+ningún vehículo registrado por patente quedará marcado como tal en la
+base de datos, aunque la UI de "Confirmar datos" ya esté lista desde
+esta fase.
+
+---

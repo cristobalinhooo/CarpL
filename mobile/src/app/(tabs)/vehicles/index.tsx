@@ -1,6 +1,7 @@
+import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { Vehicle } from '@/api/vehicles';
 import { EmptyState } from '@/components/empty-state';
@@ -12,19 +13,14 @@ import { theme } from '@/theme';
 type ScreenState = 'loading' | 'error' | 'empty' | 'ready';
 
 /**
- * Home (Technical Spec §12.3, Figura 7 "Dashboard"): esta fase solo
- * hace real la sección "Tu vehículo" + CTA de nueva investigación — el
- * dashboard completo del mockup también muestra "Investigación en
- * curso"/"Informe reciente", datos de `investigations`/`reports` fuera
- * del alcance nombrado de esta fase (solo `vehicles/`), diferidos a la
- * fase de Investigaciones del frontend (ver plan de esta fase).
- *
- * "Vehículo activo" no es un campo del backend: `GET /vehicles` ya
- * ordena por `createdAt desc` (Figura 6: "el vehículo recién guardado
- * aparece primero y se marca como activo"), así que `vehicles[0]` es
- * el vehículo activo por construcción, sin lógica nueva que inventar.
+ * Mis Vehículos (Figura 6): lista + entrada a "Agregar vehículo".
+ * `vehicles[0]` es el activo (mismo criterio que Home, Figura 6 lo
+ * explica: "el vehículo recién guardado aparece primero"). El menú
+ * "..." (editar/archivar/eliminar) y el badge "Sin investigaciones" del
+ * mockup quedan fuera de esta fase — dependen de datos/acciones que no
+ * están en el alcance nombrado (ver plan de esta fase).
  */
-export default function HomeScreen() {
+export default function VehiclesScreen() {
   const router = useRouter();
   const { findAll } = useVehiclesApi();
   const [state, setState] = useState<ScreenState>('loading');
@@ -71,34 +67,46 @@ export default function HomeScreen() {
       <EmptyState
         icon="directions-car"
         title="Aún no tenés vehículos"
-        description="Agregá tu vehículo para empezar a investigar un problema."
+        description="Agregá tu primer vehículo por patente o de forma manual."
         actionLabel="Agregar vehículo"
         onAction={() => router.push('/(tabs)/vehicles/add')}
-        note="Tu vehículo y tus investigaciones aparecerán acá cuando los agregues."
+        note="Tus vehículos aparecerán acá cuando los agregues."
       />
     );
   }
 
-  const activeVehicle = vehicles[0];
-
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <Text style={styles.sectionLabel}>Tu vehículo</Text>
-      <View style={styles.activeCard}>
-        <VehicleCard
-          vehicle={activeVehicle}
-          iconColor={theme.colors.surface}
-          titleColor={theme.colors.surface}
-          subtitleColor={theme.colors.surface}
-        />
-        <View style={styles.activeBadge}>
-          <Text style={styles.activeBadgeText}>Vehículo activo</Text>
-        </View>
+      <View style={styles.topBar}>
+        <Text style={styles.title}>Mis vehículos</Text>
+        <Pressable onPress={() => router.push('/(tabs)/vehicles/add')}>
+          <Text style={styles.addLink}>+ Agregar</Text>
+        </Pressable>
       </View>
-      <PrimaryButton
-        label="Nueva investigación"
-        onPress={() => router.push('/investigation/new')}
-      />
+
+      {vehicles.map((vehicle, index) => (
+        <View key={vehicle.id} style={styles.card}>
+          <VehicleCard vehicle={vehicle} />
+          {index === 0 ? (
+            <>
+              <View style={styles.activeBadge}>
+                <Text style={styles.activeBadgeText}>Vehículo activo</Text>
+              </View>
+              <PrimaryButton
+                label="Nueva investigación"
+                onPress={() => router.push('/investigation/new')}
+              />
+            </>
+          ) : null}
+        </View>
+      ))}
+
+      <Pressable
+        style={styles.addCard}
+        onPress={() => router.push('/(tabs)/vehicles/add')}>
+        <MaterialIcons name="add-circle-outline" size={24} color={theme.colors.actionPrimary} />
+        <Text style={styles.addCardText}>Agregar otro vehículo</Text>
+      </Pressable>
     </ScrollView>
   );
 }
@@ -126,13 +134,21 @@ const styles = StyleSheet.create({
     padding: theme.spacing.space24,
     gap: theme.spacing.space16,
   },
-  sectionLabel: {
-    ...theme.typography.label,
-    color: theme.colors.textPrimary,
-    opacity: 0.7,
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  activeCard: {
-    backgroundColor: theme.colors.textPrimary,
+  title: {
+    ...theme.typography.h2,
+    color: theme.colors.textPrimary,
+  },
+  addLink: {
+    ...theme.typography.label,
+    color: theme.colors.actionPrimary,
+  },
+  card: {
+    backgroundColor: theme.colors.surface,
     borderRadius: theme.spacing.space16,
     padding: theme.spacing.space20,
     gap: theme.spacing.space12,
@@ -146,6 +162,20 @@ const styles = StyleSheet.create({
   },
   activeBadgeText: {
     ...theme.typography.caption,
-    color: theme.colors.surface,
+    color: theme.colors.success,
+  },
+  addCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.space12,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: `${theme.colors.actionPrimary}66`,
+    borderRadius: theme.spacing.space16,
+    padding: theme.spacing.space20,
+  },
+  addCardText: {
+    ...theme.typography.body,
+    color: theme.colors.actionPrimary,
   },
 });

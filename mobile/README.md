@@ -24,10 +24,21 @@ usuario a medida que avanza.
   → Login; autenticado → tabs). Login/Registro/Recuperar contraseña ya
   son formularios funcionales (Figuras 2-4); cerrar sesión funciona
   desde el placeholder de Perfil.
+- **Fase 3 (Vehículos)**: Home y Mis Vehículos ya hablan contra
+  `vehicles/` (`POST /vehicles`, `GET /vehicles`, `POST
+  /vehicles/lookup-by-plate`, Fase 3/3b del backend). Agregar vehículo
+  (Figura 5) ofrece patente o manual en una sola pantalla — con el
+  adaptador nulo del backend la búsqueda por patente siempre cae a
+  manual, tratado como un mensaje neutro, nunca un error. Confirmar
+  datos (nueva, solo alcanzable tras una búsqueda exitosa) queda lista
+  para cuando exista un proveedor real (Fase 3b). "Vehículo activo" es
+  simplemente el primero de `GET /vehicles` (ya ordenado por más
+  reciente) — no es un campo del backend. Primeras pantallas de datos
+  protegidas más allá de logout: un 401 fuerza cierre de sesión.
 
 Los módulos restantes (pantallas con contenido y lógica real más allá
-de Auth: vehículos, evidencia, chat, informe) se añaden fase a fase —
-no existen todavía por diseño.
+de Auth/Vehículos: investigaciones, evidencia, chat, informe) se
+añaden fase a fase — no existen todavía por diseño.
 
 ## Estructura
 
@@ -50,8 +61,12 @@ mobile/
 │   │   │   └── forgot-password.tsx  # Formulario real (Fase 2) — Figura 4
 │   │   ├── (tabs)/             # Tabs persistentes (§12.2/12.3) — route group
 │   │   │   ├── _layout.tsx     # Inicio, Vehículos, Historial, Perfil
-│   │   │   ├── index.tsx       # Inicio (Home) — placeholder
-│   │   │   ├── vehicles.tsx    # placeholder
+│   │   │   ├── index.tsx       # Inicio (Home) — real (Fase 3), Figura 7 acotada
+│   │   │   ├── vehicles/        # Mis Vehículos — carpeta (Fase 3, stack anidado
+│   │   │   │   ├── _layout.tsx # en el tab, no un archivo plano como antes)
+│   │   │   │   ├── index.tsx   # Mis Vehículos — real (Fase 3), Figura 6
+│   │   │   │   ├── add.tsx     # Agregar vehículo — real (Fase 3), Figura 5
+│   │   │   │   └── confirm.tsx # Confirmar datos — real (Fase 3), tras lookup exitoso
 │   │   │   ├── history.tsx     # placeholder
 │   │   │   └── profile.tsx     # placeholder + cerrar sesión real (Fase 2)
 │   │   └── investigation/      # Stack de investigación (§12.2) — carpeta normal,
@@ -66,17 +81,24 @@ mobile/
 │   │   ├── typography.ts       # Context/Provider (no hay dark mode pedido
 │   │   ├── spacing.ts          # todavía)
 │   │   └── index.ts
-│   ├── api/                    # Cliente HTTP contra el backend (Fase 2)
+│   ├── api/                    # Cliente HTTP contra el backend (Fase 2/3)
 │   │   ├── client.ts           # apiFetch<T> genérico + ApiError/NetworkError
-│   │   └── auth.ts             # register/login/forgotPassword/refresh/logout
+│   │   ├── auth.ts             # register/login/forgotPassword/refresh/logout
+│   │   └── vehicles.ts         # create/findAll/lookupByPlate (Fase 3)
 │   ├── services/                # Acceso a APIs del dispositivo (Fase 2)
 │   │   └── session-storage.ts  # SecureStore (nativo) / localStorage (web)
-│   ├── hooks/                   # Estado compartido (Fase 2)
-│   │   └── use-session.tsx     # SessionProvider + useSession()
+│   ├── hooks/                   # Estado compartido (Fase 2/3)
+│   │   ├── use-session.tsx     # SessionProvider + useSession()
+│   │   └── use-vehicles-api.ts # wrapper de api/vehicles.ts + logout automático en 401
+│   ├── constants/                # Datos estáticos sin backend real detrás (Fase 3)
+│   │   └── vehicle-brands.ts   # marcas para el autocompletado de "Marca", no un catálogo
 │   └── components/              # Compartidos entre pantallas
 │       ├── screen-placeholder.tsx  # placeholder de esqueleto (Fase 1)
 │       ├── form-field.tsx      # campo de formulario (Fase 2, Figuras 2-4)
-│       └── primary-button.tsx  # botón primario con loading (Fase 2)
+│       ├── primary-button.tsx  # botón primario con loading (Fase 2)
+│       ├── brand-autocomplete-field.tsx  # Marca con sugerencias no bloqueantes (Fase 3)
+│       ├── empty-state.tsx     # patrón Figura 23, reutilizable (Fase 3)
+│       └── vehicle-card.tsx    # presentación compartida de un vehículo (Fase 3)
 ├── assets/                      # Íconos/splash (branding real pendiente)
 ├── app.json
 ├── package.json
@@ -86,9 +108,9 @@ mobile/
 └── .env                         # real, ignorado por git
 ```
 
-`types/`, `constants/` (Technical Spec §17.1) todavía no existen como
-carpetas — se crean cuando una fase futura tenga algo real que poner
-ahí, no vacías de antemano.
+`types/` (Technical Spec §17.1) todavía no existe como carpeta — se
+crea cuando una fase futura tenga algo real que poner ahí, no vacía de
+antemano.
 
 ## Configuración de entorno
 
