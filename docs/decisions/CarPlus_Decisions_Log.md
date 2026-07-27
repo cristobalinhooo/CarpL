@@ -1050,3 +1050,222 @@ evidence.service.ts`, no bloqueante, no resuelto en esta fase
 (frontend-only).
 
 ---
+
+## D-021 — Fase 5 (AI Chat): timeout y reintentos propios para `generateResponse()`, bug real diagnosticado en vivo
+
+**Fecha:** 2026-07-26
+**Estado:** Resuelto
+
+**Contexto:** Reporte real desde el celular ("No pudimos enviar el
+mensaje", ~04:14 hora local) en medio de una conversación larga real
+con la IA. El diagnóstico (logs del backend, pino, cruzados contra
+`Message`/`Investigation` en Prisma por timestamp) encontró la causa
+exacta:
+
+1. `ClaudeAiProvider.generateResponse()` (`backend/src/ai/adapters/
+   claude-ai-provider.ts`) no pasaba ningún `timeout` propio a
+   `client.messages.create(...)` — a diferencia de `generateReport()`,
+   que sí lo hace (`{ timeout: reportTimeoutMs }`). Sin override,
+   hereda el timeout global del cliente Anthropic
+   (`AI_TIMEOUT_MS=15000`, construido en
+   `anthropic-client.provider.ts`).
+2. El tiempo de respuesta por turno crece con el largo acumulado de la
+   conversación — evidencia real de la misma conversación fallida:
+   10.4s → 11.4s → 13.8s en tres turnos consecutivos (turnos 7-9) —
+   acercándose cada vez más al techo de 15s.
+3. Al cruzar ese techo, el SDK de Anthropic reintenta automáticamente
+   (`maxRetries` por defecto del SDK es 2, confirmado en
+   `node_modules/@anthropic-ai/sdk/client.d.ts`), sin que el usuario
+   vea ninguna señal intermedia — el request final tarda ~3× el
+   timeout nominal (~46s reales en los logs) antes de fallar.
+
+**Decisión:**
+
+1. `generateResponse()` recibe su propio timeout, vía nueva variable
+   `AI_CONVERSATION_TIMEOUT_MS` (default 30000ms) —
+   `src/config/configuration.ts`, `src/config/env.validation.ts`,
+   `.env`/`.env.example`. Más generoso que `AI_TIMEOUT_MS` (15s, que
+   sigue existiendo como default de construcción del cliente, ya sin
+   ningún call site real que lo herede) pero más corto que
+   `AI_REPORT_TIMEOUT_MS` (60s): a diferencia de `generateReport()`
+   (asíncrono vía `jobs`), esta llamada es síncrona, con el usuario
+   esperando en vivo.
+2. `maxRetries: 0` para esta llamada específica — mejor fallar rápido
+   y con un error claro que reintentar en silencio y demorar 3× el
+   timeout sin que el usuario sepa qué está pasando. `generateReport()`
+   no se toca (sigue heredando el `maxRetries` por defecto del SDK; no
+   tiene la misma presión de espera en vivo).
+3. La nota "Mejora propuesta — Política de resumen" ya existente en el
+   Technical Spec §14.4 (resumen estructurado del contexto
+   conversacional cuando excede un umbral de tokens, preservando
+   hechos/contradicciones/hipótesis/evidencia, solo en el prompt
+   enviado al proveedor, nunca en `Messages`) deja de ser una mejora
+   hipotética: el punto 2 de este contexto es evidencia real de que el
+   costo por turno crece con el largo de la conversación y en algún
+   momento vuelve a chocar contra cualquier timeout, por más generoso
+   que sea — el fix de este mismo D-021 alivia el síntoma, no la causa.
+   Sigue sin implementarse ahora; sube de prioridad para cuando se
+   planifique una fase de pulido (mismo tratamiento que D-014/D-016:
+   esta bitácora es la fuente de verdad de la resolución/prioridad
+   real, no se edita el texto del Technical Spec).
+
+**Consecuencias:** `backend/src/ai/adapters/claude-ai-provider.ts`
+(`generateResponse`), `backend/src/config/configuration.ts`,
+`backend/src/config/env.validation.ts`, `backend/.env`,
+`backend/.env.example`, `backend/src/ai/adapters/
+claude-ai-provider.spec.ts` (test actualizado a la nueva firma de
+`messages.create`). Suite completa (197 tests) y lint verificados tras
+el cambio.
+
+---
+
+## D-022 — Prompt de la IA (dialecto y brevedad) y flujo Home/Nueva Investigación
+
+**Fecha:** 2026-07-26
+**Estado:** Resuelto
+
+**Contexto:** Verificación en vivo de Fase 5 encontró cuatro problemas
+reales de producto, además del bug de navegación del punto 1 (sin
+entrada propia en esta bitácora — fix de una línea, causa documentada
+como comentario en `header-back-button.tsx`, no amerita su propia
+decisión):
+
+1. La IA respondía en voseo rioplatense ("vos", "podés", "contame") en \
+vez de español chileno/neutro — el texto de los tres prompts
+(`system-prompt.ts`, `report-generation-prompt.ts`,
+`evidence-analysis-prompt.ts`, más `build-context-prompt.ts`) estaba
+escrito en voseo y no había ninguna instrucción de dialecto; el modelo
+aparentemente imitaba el registro del propio texto de instrucciones.
+2. Las preguntas de la IA venían largas, con explicación acumulada
+antes de la única pregunta del turno — el principio 3 existente ("Una
+pregunta, un objetivo", PC-002 del PRD) ya prohibía combinar preguntas
+distintas, pero no exigía brevedad.
+3. En Home, la tarjeta de "vehículo activo" no era tocable — sin
+mockup de "Detalle de vehículo" en `docs/design/mockups/` (confirmado),
+se le propusieron al usuario 3 opciones (Mis Vehículos, Historial
+filtrado por vehículo —requiere construir un filtro que no existe—, o
+dejarla no-tocable) y se resolvió por **Mis Vehículos**: cero UI nueva,
+reutiliza la lista ya existente.
+4. La descripción escrita en "Nueva investigación" se mostraba de
+nuevo como tarjeta fija en Chat, y el usuario tenía que volver a
+escribirla como su primer mensaje real — redundante.
+
+**Decisión:**
+
+1. Se reescribe el texto de los cuatro archivos de prompt de voseo a
+   tuteo neutro/chileno, y se agrega una regla explícita de dialecto en
+   cada uno ("usa siempre 'tú', nunca 'vos'..."). Versión bumpeada en
+   cada archivo (`SYSTEM_PROMPT_VERSION` 3→4,
+   `REPORT_GENERATION_PROMPT_VERSION` 1→2,
+   `EVIDENCE_ANALYSIS_PROMPT_VERSION` 1→2) siguiendo la convención ya
+   establecida en cada archivo. Se extendió el fix a los tres prompts
+   (no solo al conversacional) por consistencia — el informe y el
+   resumen de evidencia son igual de user-facing.
+2. Se refuerza el principio 3 de `system-prompt.ts` con una cláusula
+   de brevedad explícita ("mensaje corto... no acumules explicaciones
+   largas antes de la pregunta").
+3. `mobile/src/app/(tabs)/index.tsx`: la tarjeta de vehículo activo
+   ahora es un `Pressable` que navega a `/(tabs)/vehicles`.
+4. `mobile/src/app/investigation/[id]/chat.tsx`: se elimina la tarjeta
+   fija de descripción; en su lugar, el campo de mensaje (`draft`) se
+   pre-completa con `investigation.description` una sola vez (si
+   todavía no hay ningún mensaje) — nunca de nuevo en refocos/polls
+   posteriores, para no pisar lo que el usuario ya edite o borre. Sigue
+   siendo editable y sigue exigiendo tocar "Enviar": nada se manda
+   solo, mismo principio ya documentado en D-020.
+5. `mobile/src/app/investigation/new.tsx`: se agregan chips de
+   "problemas comunes" (`mobile/src/constants/common-problems.ts`,
+   mismo patrón que `vehicle-brands.ts`) que completan el campo de
+   descripción al tocarlos — reemplazan el texto, nunca lo concatenan;
+   el campo sigue editable después. Sugerencia, nunca bloqueante.
+
+**Consecuencias:** `backend/src/ai/prompts/{system-prompt,
+report-generation-prompt,evidence-analysis-prompt,
+build-context-prompt}.ts`; `mobile/src/app/(tabs)/index.tsx`;
+`mobile/src/app/investigation/{new,[id]/chat}.tsx`;
+`mobile/src/constants/common-problems.ts`. Suite backend (197 tests),
+lint y `tsc` de ambos paquetes verificados tras el cambio.
+
+---
+
+## D-023 — Nota de roadmap: mejoras pendientes de Chat, sin implementar
+
+**Fecha:** 2026-07-26
+**Estado:** Propuesto — no implementado, prioridad a definir en una
+fase de pulido futura (mismo tratamiento que D-013).
+
+**Contexto:** Durante la verificación en vivo de Fase 5 se
+identificaron tres mejoras de UX reales pero fuera de alcance de esta
+sesión — se documentan para no perder la idea ni el razonamiento,
+nunca para construirse ahora.
+
+**Decisión (documentar, no implementar):**
+
+1. **Streaming del texto de la IA** — que la respuesta aparezca
+   escribiéndose en vivo, no toda de golpe al terminar. Mejora
+   percibida de latencia, especialmente relevante tras D-021 (turnos de
+   hasta 30s).
+2. **Botones de respuesta rápida generados dinámicamente por la
+   propia IA**, según lo que la pregunta del turno permita (por
+   ejemplo, si la pregunta es "¿el pedal hace resistencia o no?", la IA
+   podría ofrecer esas dos opciones como botones) — distinto de los
+   chips fijos de "problemas comunes" de D-022 (punto 5), que son una
+   lista estática y solo aplican a la descripción inicial, no a cada
+   turno de la conversación.
+3. **Indicador cualitativo de progreso** ("Reuniendo información..." →
+   "Casi listo para analizar") mientras dura la investigación — nunca
+   un contador numérico inventado ("pregunta 3 de 7"), ya que la IA no
+   sabe de antemano cuántas preguntas va a necesitar; solo un estado
+   cualitativo derivado de señales ya disponibles (cantidad de
+   hipótesis, `recommendedState`, etc.).
+
+**Consecuencias:** Ninguna todavía — nota de roadmap únicamente.
+Cuando se planifique una fase de pulido, esta entrada es el punto de
+partida para las tres.
+
+---
+
+## D-024 — Deuda técnica: `reports.e2e-spec.ts` intermitente bajo carga completa de la suite
+
+**Fecha:** 2026-07-26
+**Estado:** No resuelto — no bloqueante, nota de deuda técnica
+
+**Contexto:** Detectado por primera vez durante la Fase 8 del backend
+(endurecimiento/pruebas, D-016) como una tarea sugerida que en su
+momento se decidió no tomar — nunca llegó a escribirse en esta
+bitácora, así que no quedó rastro en el repo. Confirmado de nuevo hoy,
+al verificar que `test/messages.e2e-spec.ts`/`test/reports.e2e-spec.ts`
+seguían pasando tras el cambio de contrato de `quickReplies` (ver
+entrada de Fase 5 — botones de respuesta rápida): `npm run test:e2e`
+sobre la suite completa hace fallar `reports.e2e-spec.ts` de forma
+intermitente, con **al menos dos síntomas distintos** vistos en
+corridas separadas:
+
+1. `StorageService.downloadObject` → `InternalServerErrorException: No
+   se pudo descargar el archivo de Storage: Object not found`.
+2. `Error: el proveedor de IA no devolvió un informe estructurado`,
+   lanzado desde el propio `FakeAiProvider` del spec (`test/
+   reports.e2e-spec.ts`).
+
+Que la misma suite falle con dos causas raíz distintas entre corridas
+—ninguna relacionada con el código bajo prueba en cada caso— apunta a
+un problema de **aislamiento entre tests** (estado compartido y/o
+condición de carrera sobre el `JobsWorker`/Postgres local bajo carga
+completa), no a una causa única identificable todavía. Confirmado que
+`evidence.e2e-spec.ts` y `messages.e2e-spec.ts` no muestran el mismo
+patrón cuando corren sin un segundo proceso de backend compitiendo por
+los mismos jobs — pero `reports.e2e-spec.ts` sigue fallando a veces
+incluso corrido en aislamiento total, así que la causa no se reduce
+solo a eso.
+
+**Decisión:** No se investiga a fondo ahora — queda documentado acá
+para no perder la señal por segunda vez. Se retoma cuando corresponda
+priorizar deuda técnica de testing.
+
+**Consecuencias:** Ninguna todavía. Referencia para cuando se
+investigue: correr `reports.e2e-spec.ts` en aislamiento (`npx jest
+--config ./test/jest-e2e.json reports.e2e-spec.ts`) reproduce el
+problema igual, así que no depende únicamente de otros archivos e2e
+corriendo en paralelo.
+
+---

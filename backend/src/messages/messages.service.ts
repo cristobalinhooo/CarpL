@@ -226,6 +226,7 @@ export class MessagesService {
           message: aiResponse.assistantMessage,
           isSafetyStop: aiResponse.safety.stop,
           safetyMessage: aiResponse.safety.message,
+          quickReplies: aiResponse.quickReplies,
         },
       });
 

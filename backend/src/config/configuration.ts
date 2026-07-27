@@ -12,6 +12,7 @@ export interface AppConfig {
   aiModel: string;
   aiApiKeyClaude: string;
   aiTimeoutMs: number;
+  aiConversationTimeoutMs: number;
   aiReportTimeoutMs: number;
   ragEmbeddingProvider: string;
   ragMaxChunksPerQuery: number;
@@ -36,6 +37,10 @@ export default (): AppConfig => ({
   aiModel: process.env.AI_MODEL ?? '',
   aiApiKeyClaude: process.env.AI_API_KEY_CLAUDE ?? '',
   aiTimeoutMs: parseInt(process.env.AI_TIMEOUT_MS ?? '15000', 10),
+  aiConversationTimeoutMs: parseInt(
+    process.env.AI_CONVERSATION_TIMEOUT_MS ?? '30000',
+    10,
+  ),
   aiReportTimeoutMs: parseInt(process.env.AI_REPORT_TIMEOUT_MS ?? '60000', 10),
   ragEmbeddingProvider: process.env.RAG_EMBEDDING_PROVIDER ?? 'null',
   ragMaxChunksPerQuery: parseInt(

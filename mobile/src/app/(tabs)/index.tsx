@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { Vehicle } from '@/api/vehicles';
 import { EmptyState } from '@/components/empty-state';
@@ -84,7 +84,9 @@ export default function HomeScreen() {
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.sectionLabel}>Tu vehículo</Text>
-      <View style={styles.activeCard}>
+      <Pressable
+        style={styles.activeCard}
+        onPress={() => router.push('/(tabs)/vehicles')}>
         <VehicleCard
           vehicle={activeVehicle}
           iconColor={theme.colors.surface}
@@ -94,7 +96,7 @@ export default function HomeScreen() {
         <View style={styles.activeBadge}>
           <Text style={styles.activeBadgeText}>Vehículo activo</Text>
         </View>
-      </View>
+      </Pressable>
       <PrimaryButton
         label="Nueva investigación"
         onPress={() => router.push('/investigation/new')}

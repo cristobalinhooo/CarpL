@@ -107,6 +107,7 @@ function fakeMessage(overrides: Partial<Message> = {}): Message {
     message: 'Frena raro',
     isSafetyStop: false,
     safetyMessage: null,
+    quickReplies: [],
     createdAt: new Date(),
     ...overrides,
   };

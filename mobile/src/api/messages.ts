@@ -15,6 +15,7 @@ export interface Message {
   message: string;
   isSafetyStop: boolean;
   safetyMessage: string | null;
+  quickReplies: string[];
   createdAt: string;
 }
 

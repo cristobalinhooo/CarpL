@@ -94,6 +94,7 @@ function fakeAiResponse(
   return {
     assistantMessage: '¿Desde cuándo notás el ruido?',
     question: null,
+    quickReplies: [],
     requestedEvidence: [],
     hypothesisUpdates: [],
     missingInformation: [],

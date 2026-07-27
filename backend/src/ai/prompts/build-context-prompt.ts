@@ -83,7 +83,7 @@ export function buildContextPrompt(context: AiConversationContext): string {
     ...retrievedDocumentationLines,
     '',
     '## Tarea',
-    'Analizá el último mensaje del usuario y respondé usando la herramienta ' +
+    'Analiza el último mensaje del usuario y responde usando la herramienta ' +
       'ofrecida: tu próxima pregunta o mensaje, actualizaciones de hipótesis ' +
       'si corresponde, y tu recomendación de estado.',
   ].join('\n');

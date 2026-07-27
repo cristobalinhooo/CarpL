@@ -1,3 +1,4 @@
+import { useHeaderHeight } from '@react-navigation/elements';
 import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -19,6 +20,7 @@ import type { Vehicle } from '@/api/vehicles';
 import { AttachmentMenu } from '@/components/attachment-menu';
 import { ChatBubble } from '@/components/chat-bubble';
 import { EvidenceCard } from '@/components/evidence-card';
+import { HeaderBackButton } from '@/components/header-back-button';
 import { PrimaryButton } from '@/components/primary-button';
 import { useEvidenceApi } from '@/hooks/use-evidence-api';
 import { useInvestigationsApi } from '@/hooks/use-investigations-api';
@@ -80,12 +82,23 @@ type ScreenState = 'loading' | 'error' | 'ready';
  * Chat de investigación (Figura 9, Technical Spec §12.3): conversación
  * + evidencia en una sola línea de tiempo cronológica. Sin "Ver caso"
  * ni "Analizar ahora" (fases futuras, hallazgo 7 del plan). La
- * descripción inicial (Fase 4) se muestra como tarjeta fija, nunca
- * como mensaje de IA fantasma (hallazgo 1) — ningún mensaje con costo
- * se envía sin que el usuario escriba el suyo primero.
+ * descripción inicial (Fase 4) pre-completa el campo de mensaje (una
+ * sola vez, si todavía no hay mensajes) en vez de mostrarse duplicada
+ * como tarjeta fija (D-022) — sigue siendo editable y nunca se envía
+ * sola: el usuario tiene que tocar "Enviar" igual que con cualquier
+ * otro mensaje, nunca como mensaje de IA fantasma (hallazgo 1) —
+ * ningún mensaje con costo se envía sin que el usuario lo confirme.
  */
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  // `behavior="padding"` por sí solo no compensa el header nativo del
+  // Stack (expo-router usa @react-navigation/native-stack: el header
+  // vive fuera del árbol de vistas de JS, así que KeyboardAvoidingView
+  // mide su propio frame sin saber cuánto ocupa) — en iOS esto dejaba
+  // el teclado tapando el input entero, no solo desplazado. Se corrige
+  // con keyboardVerticalOffset={headerHeight}, patrón recomendado por
+  // la doc de react-navigation para esta combinación exacta.
+  const headerHeight = useHeaderHeight();
   const { findOne } = useInvestigationsApi();
   const { findAll: findAllMessages, send } = useMessagesApi();
   const { findAll: findAllEvidence, upload } = useEvidenceApi();
@@ -102,6 +115,11 @@ export default function ChatScreen() {
 
   const scrollRef = useRef<ScrollView>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Se pre-completa `draft` con la descripción inicial una sola vez (si
+  // todavía no hay ningún mensaje) — nunca de nuevo en refocos/polls
+  // posteriores, para no pisar lo que el usuario ya haya escrito o
+  // borrado (hallazgo 5, D-022).
+  const prefillDoneRef = useRef(false);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -117,6 +135,12 @@ export default function ChatScreen() {
       setMessages(messagesResult);
       setEvidenceList(evidenceResult);
       setVehicle(vehiclesResult.find((v) => v.id === investigationResult.vehicleId) ?? null);
+      if (!prefillDoneRef.current) {
+        prefillDoneRef.current = true;
+        if (messagesResult.length === 0) {
+          setDraft(investigationResult.description);
+        }
+      }
       setState('ready');
     } catch {
       setState('error');
@@ -226,7 +250,7 @@ export default function ChatScreen() {
   if (state === 'loading') {
     return (
       <>
-        <Stack.Screen options={{ title }} />
+        <Stack.Screen options={{ title, headerLeft: () => <HeaderBackButton /> }} />
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={theme.colors.actionPrimary} />
         </View>
@@ -237,7 +261,7 @@ export default function ChatScreen() {
   if (state === 'error' || !investigation) {
     return (
       <>
-        <Stack.Screen options={{ title }} />
+        <Stack.Screen options={{ title, headerLeft: () => <HeaderBackButton /> }} />
         <View style={styles.centered}>
           <Text style={styles.errorText}>No pudimos cargar esta investigación.</Text>
           <View style={styles.retryButton}>
@@ -251,13 +275,17 @@ export default function ChatScreen() {
   const badge = statusBadge(investigation.currentStatus);
   const blockedReason = messageBlockedReason(investigation.currentStatus);
   const canAttach = EVIDENCE_ALLOWED_STATUSES.includes(investigation.currentStatus);
+  // Los quick replies solo tienen sentido en la última pregunta todavía
+  // "abierta" — un mensaje de la IA más antiguo ya quedó respondido.
+  const lastAiMessageId = [...messages].reverse().find((m) => m.sender === 'AI')?.id;
 
   return (
     <>
-      <Stack.Screen options={{ title }} />
+      <Stack.Screen options={{ title, headerLeft: () => <HeaderBackButton /> }} />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={headerHeight}>
         <View style={styles.header}>
           <View style={[styles.badge, { backgroundColor: `${badge.color}33` }]}>
             <Text style={[styles.badgeText, { color: badge.color }]}>{badge.label}</Text>
@@ -270,11 +298,6 @@ export default function ChatScreen() {
         </View>
 
         <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
-          <View style={styles.descriptionCard}>
-            <Text style={styles.descriptionLabel}>Descripción inicial</Text>
-            <Text style={styles.descriptionText}>{investigation.description}</Text>
-          </View>
-
           {timeline.length === 0 ? (
             <Text style={styles.hintText}>
               Escribí tu primer mensaje para que la IA empiece a investigar.
@@ -282,7 +305,15 @@ export default function ChatScreen() {
           ) : (
             timeline.map((item) =>
               item.kind === 'message' ? (
-                <ChatBubble key={item.id} message={item.message} />
+                <ChatBubble
+                  key={item.id}
+                  message={item.message}
+                  onQuickReply={
+                    !blockedReason && item.message.id === lastAiMessageId
+                      ? setDraft
+                      : undefined
+                  }
+                />
               ) : (
                 <EvidenceCard key={item.id} evidence={item.evidence} />
               ),
@@ -364,21 +395,6 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     padding: theme.spacing.space16,
     gap: theme.spacing.space12,
-  },
-  descriptionCard: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.spacing.space12,
-    padding: theme.spacing.space16,
-    gap: theme.spacing.space4,
-  },
-  descriptionLabel: {
-    ...theme.typography.label,
-    color: theme.colors.textPrimary,
-    opacity: 0.7,
-  },
-  descriptionText: {
-    ...theme.typography.body,
-    color: theme.colors.textPrimary,
   },
   hintText: {
     ...theme.typography.body,

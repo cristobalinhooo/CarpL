@@ -88,6 +88,7 @@ function fakeMessage(overrides: Partial<Message> = {}): Message {
     message: 'texto',
     isSafetyStop: false,
     safetyMessage: null,
+    quickReplies: [],
     createdAt: new Date(),
     ...overrides,
   };
@@ -114,6 +115,7 @@ function fakeAiResponse(
   return {
     assistantMessage: '¿Desde cuándo notás el ruido?',
     question: '¿Desde cuándo notás el ruido?',
+    quickReplies: [],
     requestedEvidence: [],
     hypothesisUpdates: [],
     missingInformation: [],
@@ -243,6 +245,7 @@ describe('MessagesService', () => {
           message: fakeAiResponse().assistantMessage,
           isSafetyStop: false,
           safetyMessage: null,
+          quickReplies: [],
         },
       });
       expect(result.userMessage.id).toBe('user-msg');
@@ -281,6 +284,37 @@ describe('MessagesService', () => {
           message: fakeAiResponse().assistantMessage,
           isSafetyStop: true,
           safetyMessage: 'Dejá de conducir y llamá a un mecánico',
+          quickReplies: [],
+        },
+      });
+    });
+
+    it('persiste quickReplies tal como los devuelve la IA', async () => {
+      aiProvider.generateResponse.mockResolvedValue(
+        fakeAiResponse({ quickReplies: ['Sí', 'No'] }),
+      );
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(
+          fakeMessage({
+            id: 'ai-msg',
+            sender: 'AI',
+            quickReplies: ['Sí', 'No'],
+          }),
+        );
+
+      await service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+        message: '¿enciende?',
+      });
+
+      expect(prisma.message.create).toHaveBeenNthCalledWith(2, {
+        data: {
+          investigationId: INVESTIGATION_ID,
+          sender: 'AI',
+          message: fakeAiResponse().assistantMessage,
+          isSafetyStop: false,
+          safetyMessage: null,
+          quickReplies: ['Sí', 'No'],
         },
       });
     });

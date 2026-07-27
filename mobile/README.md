@@ -6,7 +6,9 @@ predefinido fase por fase en el Technical Spec — solo el mapa de
 pantallas (§12.3) y el flujo principal (§12.4) — se arma junto con el
 usuario a medida que avanza.
 
-- **Fase 1**: proyecto Expo inicializado (`create-expo-app`, SDK 57,
+- **Fase 1**: proyecto Expo inicializado (`create-expo-app`, SDK 57 en
+  su momento — bajado a **SDK 54** después de Fase 5, porque Expo Go de
+  las tiendas todavía no tenía SDK 57 aprobado; ver nota más abajo —
   TypeScript), **Expo Router** (ruteo por archivos, no React Navigation
   clásico con navigators escritos a mano — decisión explícita de esta
   fase), esqueleto de navegación sin pantallas reales (cada ruta es un
@@ -64,7 +66,19 @@ usuario a medida que avanza.
   mensajes pero no adjuntos. Sin "Ver caso" ni "Analizar ahora"
   (pantallas/módulos de fases futuras). Fotos/videos vía
   `expo-image-picker`, audio grabado en la app vía **`expo-audio`**
-  (`expo-av` está deprecado en SDK 57, no se usa).
+  (`expo-av` está deprecado, no se usa).
+- **Downgrade a Expo SDK 54 (post-Fase 5)**: SDK 57 todavía no estaba
+  aprobado por Apple para Expo Go de las tiendas al momento de probar
+  en un dispositivo real — se bajó todo el proyecto a **SDK 54**
+  (`npx expo install expo@54 --fix`, más `expo-asset`/`expo-constants`
+  agregados a mano como dependencias directas, ya que quedaron
+  duplicados/faltantes tras el downgrade — confirmado con `npx
+  expo-doctor`, 18/18 checks). Se verificó explícitamente contra la
+  documentación versionada real (`docs.expo.dev/versions/v54.0.0`) que
+  `expo-audio`/`expo-image-picker`/`expo-secure-store`/`expo-router`
+  siguen estables en SDK 54 antes de bajar la versión. Sin cambios de
+  código de la app — solo versiones de dependencias. `mobile/AGENTS.md`
+  actualizado a la versión de docs correspondiente (v54, no v57).
 
 Los módulos restantes (pantallas con contenido y lógica real más allá
 de Auth/Vehículos/Investigaciones/Chat: informe) se añaden fase a

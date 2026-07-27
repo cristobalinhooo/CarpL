@@ -1,9 +1,11 @@
+import { useHeaderHeight } from '@react-navigation/elements';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,6 +18,7 @@ import type { Vehicle } from '@/api/vehicles';
 import { EmptyState } from '@/components/empty-state';
 import { PrimaryButton } from '@/components/primary-button';
 import { VehicleSelector } from '@/components/vehicle-selector';
+import { COMMON_PROBLEMS } from '@/constants/common-problems';
 import { useInvestigationsApi } from '@/hooks/use-investigations-api';
 import { useVehiclesApi } from '@/hooks/use-vehicles-api';
 import { theme } from '@/theme';
@@ -51,6 +54,11 @@ type ScreenState = 'loading' | 'error' | 'empty' | 'ready';
  */
 export default function NewInvestigationScreen() {
   const router = useRouter();
+  // Mismo fix que investigation/[id]/chat.tsx: sin keyboardVerticalOffset,
+  // KeyboardAvoidingView no compensa el header nativo del Stack (vive
+  // fuera del árbol de vistas de JS bajo native-stack) y en iOS el
+  // teclado termina tapando el campo entero.
+  const headerHeight = useHeaderHeight();
   const { findAll: findAllVehicles } = useVehiclesApi();
   const { create, start } = useInvestigationsApi();
 
@@ -155,7 +163,8 @@ export default function NewInvestigationScreen() {
       <Stack.Screen options={{ title: 'Nueva investigación' }} />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={headerHeight}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.header}>
             <Text style={styles.title}>¿Qué está ocurriendo?</Text>
@@ -172,6 +181,17 @@ export default function NewInvestigationScreen() {
 
           <View style={styles.descriptionField}>
             <Text style={styles.label}>Descripción</Text>
+            <View style={styles.problemChips}>
+              {COMMON_PROBLEMS.map((problem) => (
+                <Pressable
+                  key={problem}
+                  style={styles.problemChip}
+                  onPress={() => setDescription(problem)}
+                  disabled={saving}>
+                  <Text style={styles.problemChipText}>{problem}</Text>
+                </Pressable>
+              ))}
+            </View>
             <View
               style={[
                 styles.textAreaWrapper,
@@ -251,6 +271,23 @@ const styles = StyleSheet.create({
     gap: theme.spacing.space8,
   },
   label: {
+    ...theme.typography.label,
+    color: theme.colors.textPrimary,
+  },
+  problemChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.space8,
+  },
+  problemChip: {
+    borderRadius: theme.spacing.space8,
+    paddingHorizontal: theme.spacing.space16,
+    paddingVertical: theme.spacing.space8,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: `${theme.colors.textPrimary}33`,
+  },
+  problemChipText: {
     ...theme.typography.label,
     color: theme.colors.textPrimary,
   },

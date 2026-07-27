@@ -26,6 +26,7 @@ function validToolInput() {
   return {
     assistantMessage: '¿Desde cuándo notás el ruido?',
     question: '¿Desde cuándo notás el ruido?',
+    quickReplies: [],
     requestedEvidence: [],
     hypothesisUpdates: [],
     missingInformation: [],
@@ -46,6 +47,7 @@ describe('ClaudeAiProvider', () => {
     config = {
       get: jest.fn((key: string) => {
         if (key === 'aiModel') return 'claude-sonnet-5';
+        if (key === 'aiConversationTimeoutMs') return 30000;
         if (key === 'aiReportTimeoutMs') return 60000;
         return undefined;
       }),
@@ -75,6 +77,7 @@ describe('ClaudeAiProvider', () => {
         model: 'claude-sonnet-5',
         tool_choice: { type: 'tool', name: 'submit_investigation_response' },
       }),
+      { timeout: 30000, maxRetries: 0 },
     );
     expect(result.assistantMessage).toBe(validToolInput().assistantMessage);
     expect(result.recommendedState).toBe('ACTIVE');
@@ -180,6 +183,43 @@ describe('ClaudeAiProvider', () => {
     });
 
     expect(result.referencedDocuments).toEqual(['chunk-1']);
+  });
+
+  it('acepta y devuelve quickReplies cuando la IA los ofrece', async () => {
+    client.messages.create.mockResolvedValue({
+      content: [
+        {
+          type: 'tool_use',
+          id: 't1',
+          name: 'submit_investigation_response',
+          input: { ...validToolInput(), quickReplies: ['Sí', 'No'] },
+        },
+      ],
+    });
+
+    const result = await provider.generateResponse(fakeContext());
+
+    expect(result.quickReplies).toEqual(['Sí', 'No']);
+  });
+
+  it('rechaza con ServiceUnavailableException si quickReplies excede 4 opciones', async () => {
+    client.messages.create.mockResolvedValue({
+      content: [
+        {
+          type: 'tool_use',
+          id: 't1',
+          name: 'submit_investigation_response',
+          input: {
+            ...validToolInput(),
+            quickReplies: ['a', 'b', 'c', 'd', 'e'],
+          },
+        },
+      ],
+    });
+
+    await expect(
+      provider.generateResponse(fakeContext()),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   describe('analyzeEvidence', () => {

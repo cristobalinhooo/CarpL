@@ -273,6 +273,12 @@ model Message {
   /// alrededor todavía en esta fase — solo se guarda, no se pierde.
   isSafetyStop    Boolean       @default(false) @map("is_safety_stop")
   safetyMessage   String?       @map("safety_message")
+  /// Respuestas cortas sugeridas por la IA para `message` cuando la
+  /// pregunta admite un conjunto pequeño de opciones (D-023) — vacío
+  /// para preguntas abiertas. Mismo criterio que isSafetyStop: se
+  /// persiste para que sobreviva un reload del chat, no solo vive en
+  /// memoria del turno.
+  quickReplies    String[]      @default([]) @map("quick_replies")
   createdAt       DateTime      @default(now()) @map("created_at")
 
   investigation       Investigation        @relation(fields: [investigationId], references: [id])

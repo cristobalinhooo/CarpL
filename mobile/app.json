@@ -46,7 +46,8 @@
         {
           "microphonePermission": "CarPlus necesita acceso al micrófono para grabar el sonido de tu vehículo como evidencia."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

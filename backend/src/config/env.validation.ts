@@ -39,6 +39,17 @@ export const envValidationSchema = Joi.object({
   AI_MODEL: Joi.string().required(),
   AI_API_KEY_CLAUDE: Joi.string().required(),
   AI_TIMEOUT_MS: Joi.number().integer().positive().default(15000),
+  // generateResponse() (turno de chat) es síncrono, con el usuario
+  // esperando en vivo — pero AI_TIMEOUT_MS (15s, pensado como objetivo de
+  // §11.8 para la primera respuesta) resultó insuficiente en
+  // conversaciones largas: el contexto acumulado hace crecer la latencia
+  // por turno (evidencia real: 10.4s → 11.4s → 13.8s en turnos
+  // consecutivos de una misma conversación), lo que termina chocando
+  // contra el timeout global y disparando los reintentos por defecto del
+  // SDK de Anthropic en silencio (D-021). Timeout propio, más generoso que
+  // AI_TIMEOUT_MS pero más corto que AI_REPORT_TIMEOUT_MS (esta llamada sí
+  // tiene al usuario esperando, a diferencia de generateReport()).
+  AI_CONVERSATION_TIMEOUT_MS: Joi.number().integer().positive().default(30000),
   // Fase 7 — Informes. generateReport() es asíncrono (vía `jobs`, sin
   // espera en vivo del usuario, a diferencia de la primera respuesta del
   // chat que sí tiene el objetivo ≤15s de §11.8) y su contexto/salida son

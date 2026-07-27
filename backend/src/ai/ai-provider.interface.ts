@@ -86,6 +86,11 @@ export type AiRecommendedState =
 export interface AiStructuredResponse {
   assistantMessage: string;
   question: string | null;
+  /** 2-4 respuestas cortas esperables cuando `question` admite un
+   * conjunto pequeño y natural de opciones (sí/no, alternativas
+   * concretas) — vacío cuando la pregunta requiere respuesta abierta.
+   * Nunca reemplaza el texto libre, solo lo complementa (D-023). */
+  quickReplies: string[];
   requestedEvidence: string[];
   hypothesisUpdates: AiHypothesisUpdate[];
   missingInformation: string[];

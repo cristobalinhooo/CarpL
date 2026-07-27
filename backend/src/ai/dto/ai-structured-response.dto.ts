@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsIn,
@@ -65,6 +66,11 @@ export class AiStructuredResponseDto {
   @IsOptional()
   @IsString()
   question!: string | null;
+
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsString({ each: true })
+  quickReplies!: string[];
 
   @IsArray()
   @IsString({ each: true })

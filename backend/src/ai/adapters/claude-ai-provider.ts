@@ -41,6 +41,7 @@ const RESPONSE_TOOL: Anthropic.Tool = {
     properties: {
       assistantMessage: { type: 'string' },
       question: { type: ['string', 'null'] },
+      quickReplies: { type: 'array', items: { type: 'string' } },
       requestedEvidence: { type: 'array', items: { type: 'string' } },
       hypothesisUpdates: {
         type: 'array',
@@ -79,6 +80,7 @@ const RESPONSE_TOOL: Anthropic.Tool = {
     required: [
       'assistantMessage',
       'question',
+      'quickReplies',
       'requestedEvidence',
       'hypothesisUpdates',
       'missingInformation',
@@ -288,15 +290,26 @@ export class ClaudeAiProvider implements AiProvider {
     context: AiConversationContext,
   ): Promise<AiStructuredResponse> {
     const model = this.config.get<string>('aiModel') ?? '';
+    // Timeout propio, más corto que AI_REPORT_TIMEOUT_MS: a diferencia de
+    // generateReport() (asíncrono vía `jobs`), esta llamada es síncrona,
+    // con el usuario esperando en vivo. maxRetries en 0 porque reintentar
+    // en silencio ante un timeout solo triplica la espera sin que el
+    // usuario sepa qué está pasando — mejor fallar rápido y claro (D-021).
+    const conversationTimeoutMs = this.config.get<number>(
+      'aiConversationTimeoutMs',
+    );
 
-    const response = await this.client.messages.create({
-      model,
-      max_tokens: 2048,
-      system: buildSystemPrompt(),
-      messages: [{ role: 'user', content: buildContextPrompt(context) }],
-      tools: [RESPONSE_TOOL],
-      tool_choice: { type: 'tool', name: RESPONSE_TOOL_NAME },
-    });
+    const response = await this.client.messages.create(
+      {
+        model,
+        max_tokens: 2048,
+        system: buildSystemPrompt(),
+        messages: [{ role: 'user', content: buildContextPrompt(context) }],
+        tools: [RESPONSE_TOOL],
+        tool_choice: { type: 'tool', name: RESPONSE_TOOL_NAME },
+      },
+      { timeout: conversationTimeoutMs, maxRetries: 0 },
+    );
 
     const toolUse = response.content.find(
       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
