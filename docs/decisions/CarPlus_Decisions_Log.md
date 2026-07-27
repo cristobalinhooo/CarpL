@@ -1093,8 +1093,9 @@ exacta:
 2. `maxRetries: 0` para esta llamada específica — mejor fallar rápido
    y con un error claro que reintentar en silencio y demorar 3× el
    timeout sin que el usuario sepa qué está pasando. `generateReport()`
-   no se toca (sigue heredando el `maxRetries` por defecto del SDK; no
-   tiene la misma presión de espera en vivo).
+   no se toca en este momento (sigue heredando el `maxRetries` por
+   defecto del SDK; no tiene la misma presión de espera en vivo) — ver
+   punto 4, extensión posterior que revierte esta parte.
 3. La nota "Mejora propuesta — Política de resumen" ya existente en el
    Technical Spec §14.4 (resumen estructurado del contexto
    conversacional cuando excede un umbral de tokens, preservando
@@ -1108,14 +1109,26 @@ exacta:
    planifique una fase de pulido (mismo tratamiento que D-014/D-016:
    esta bitácora es la fuente de verdad de la resolución/prioridad
    real, no se edita el texto del Technical Spec).
+4. **Extensión (2026-07-27):** `generateReport()` también pasa a
+   `maxRetries: 0`, mismo criterio exacto que el punto 2 — el frontend
+   ya tiene su propia ventana de polling con margen real sobre
+   `AI_REPORT_TIMEOUT_MS` (D-025), así que dejar que el SDK reintente en
+   silencio ya no aporta nada: solo demora 3× la respuesta sin que el
+   usuario vea ninguna señal intermedia, igual que el problema original
+   de este mismo D-021. No es una decisión nueva — es la misma decisión
+   aplicada al segundo call site que originalmente había quedado afuera
+   (punto 2 de arriba) por no tener, en ese momento, la misma presión de
+   espera en vivo; con la ventana de polling del frontend ya cubriendo
+   ese margen, la razón para dejarlo afuera dejó de aplicar.
 
 **Consecuencias:** `backend/src/ai/adapters/claude-ai-provider.ts`
-(`generateResponse`), `backend/src/config/configuration.ts`,
+(`generateResponse` y, desde el punto 4, también `generateReport`),
+`backend/src/config/configuration.ts`,
 `backend/src/config/env.validation.ts`, `backend/.env`,
 `backend/.env.example`, `backend/src/ai/adapters/
-claude-ai-provider.spec.ts` (test actualizado a la nueva firma de
-`messages.create`). Suite completa (197 tests) y lint verificados tras
-el cambio.
+claude-ai-provider.spec.ts` (tests actualizados a la nueva firma de
+`messages.create` en ambos métodos). Suite completa (201 tests) y lint
+verificados tras el cambio.
 
 ---
 
@@ -1267,5 +1280,170 @@ investigue: correr `reports.e2e-spec.ts` en aislamiento (`npx jest
 --config ./test/jest-e2e.json reports.e2e-spec.ts`) reproduce el
 problema igual, así que no depende únicamente de otros archivos e2e
 corriendo en paralelo.
+
+---
+
+## D-025 — Frontend Fase 7 (Informe): pantalla de informe, "Analizar ahora", y corrección de proceso aplicada sin pausar
+
+**Fecha:** 2026-07-26
+**Estado:** Resuelto — vigente para el MVP
+
+**Contexto:** Última pantalla del flujo principal (plan aprobado en
+modo plan, tras leer §12.3, §13.7, D-012/D-015 y las Figuras 14/15/16):
+la pantalla Informe (reemplaza el placeholder) y el botón "Analizar
+ahora" en Chat, que Fase 5 había dejado explícitamente afuera (D-020,
+hallazgo 7) porque la pantalla de destino no existía todavía.
+
+**Decisión:**
+
+1. `mobile/src/api/reports.ts`/`jobs.ts` (+ sus hooks): tipos 1:1
+   contra `report-json.schema.ts` y `JobsController`. Sin
+   `listAll`/`getVersion` — el mapa de pantallas solo pide la versión
+   vigente.
+2. Dos discrepancias mockup-vs-contrato resueltas a favor del contrato
+   real (mismo criterio que D-014): la Figura 14 ("Procesando
+   investigación", 5 checks) no se implementa — el job solo expone
+   `PENDING/RUNNING/DONE/FAILED`, y fabricar esos 5 pasos sería
+   precisión falsa (mismo principio que D-023); se reutiliza en cambio
+   el estado inline + polling que ya existía para evidencia. La Figura
+   16 ("Detalle del informe") no es una pantalla nueva — es un acordeón
+   dentro de la misma pantalla de Informe, y "Qué revisar primero"/
+   costo/limitaciones se muestran una sola vez a nivel de informe (el
+   schema real los define ahí, no por hipótesis, a diferencia de lo que
+   sugiere esa Figura).
+3. `chat.tsx`: "Analizar ahora" visible en `READY_TO_ANALYZE`, con
+   polling (mismo patrón que `pollEvidenceUntilDone`) hasta `DONE`
+   (navega a Informe) o `FAILED` (resetea el estado local de inmediato,
+   sin esperar un reload, para que el botón reaparezca en la misma
+   pantalla). "Ver informe" visible en `REPORT_GENERATED`.
+4. **Corrección de proceso aplicada durante la implementación, sin
+   pausar a confirmarla primero — mismo tratamiento que D-004, punto
+   5:** el plan aprobado decía que "Analizar ahora" iba a **reemplazar**
+   el composer mientras `currentStatus === 'READY_TO_ANALYZE'` (mismo
+   tratamiento visual que `blockedReason`). Al escribir el código se
+   detectó que eso contradecía D-012: ese estado se diseñó
+   explícitamente para seguir permitiendo mensajes
+   (`MESSAGE_ALLOWED_STATUSES` incluye `READY_TO_ANALYZE`, transicionando
+   de vuelta a `ACTIVE`) — reemplazar el composer le habría quitado al
+   usuario una capacidad que el backend ya sostiene. La corrección
+   (mostrar el botón junto al composer, sin reemplazarlo) es correcta y
+   el usuario la confirmó después del hecho, pero — igual que en D-004 —
+   se aplicó unilateralmente durante la implementación en vez de
+   pausar a confirmarla antes de escribir el código, pese a que ya
+   existía el precedente explícito de proceso de esa misma decisión.
+   Repetir el mismo tipo de desvío después de haber quedado documentado
+   una vez confirma que necesita más disciplina, no solo la anotación:
+   cambios de comportamiento distintos al plan aprobado se confirman
+   con el usuario *antes* de aplicarse, incluso cuando la corrección
+   parezca obviamente correcta.
+5. **Bug real encontrado en vivo y corregido — ventana de polling
+   propia para el informe:** `pollReportJob` en `chat.tsx` reutilizaba
+   inicialmente `POLL_INTERVAL_MS`/`MAX_POLL_ATTEMPTS`
+   (3000ms × 10 = 30s), la misma ventana que `pollEvidenceUntilDone`
+   usa para el análisis de evidencia (Claude Vision, mucho más rápido).
+   `generateReport()` corre con `AI_REPORT_TIMEOUT_MS` = 60s en el
+   backend — 30s no alcanzaba: el cliente se rendía ("está tardando más
+   de lo esperado") mientras el job seguía corriendo de verdad, el
+   botón "Analizar ahora" reaparecía de forma engañosa (nada localmente
+   reflejaba que la investigación seguía `ANALYZING`), y los reintentos
+   del usuario chocaban con `409` del backend. Corregido con una
+   constante propia, nunca reutilizando la de evidencia:
+   `REPORT_POLL_INTERVAL_MS`/`REPORT_MAX_POLL_ATTEMPTS`
+   (3000ms × 30 = 90s) — margen real de +50% sobre los 60s nominales,
+   no solo empatarlos, cubriendo además la latency de encolado del
+   `JobsWorker` (`POLL_INTERVAL_MS` = 2s ahí).
+6. **Español chileno/neutro también en el texto fijo del frontend, no
+   solo en el prompt de la IA (D-022 solo cubrió el segundo):** 10
+   pantallas de las Fases 2-5 (`(auth)/{forgot-password,login,
+   register}.tsx`, `(tabs)/{index,history,vehicles/index,
+   vehicles/add,vehicles/confirm}.tsx`, `investigation/{new,
+   [id]/chat}.tsx`) tenían voseo rioplatense en botones, mensajes de
+   error y textos de ayuda — escritas antes de que D-022 definiera el
+   dialecto, y ese solo aplicó al prompt de la IA. Corregidas las 10 a
+   tuteo neutro. Los mensajes que se repetían literalmente entre
+   archivos (el de sin conexión, duplicado en 6; validaciones de marca/
+   modelo/año, duplicadas entre `vehicles/add.tsx` y `vehicles/
+   confirm.tsx`; etc.) se extrajeron a `mobile/src/constants/
+   messages.ts` — un solo lugar para corregir si el dialecto necesita
+   otro ajuste. Convención documentada en `mobile/AGENTS.md` para que
+   las próximas fases no repitan esto, incluyendo el detalle no obvio de
+   los imperativos con pronombre enclítico sin tilde ("confirmala" se
+   lee como voseo — la forma neutra correcta es "confírmala", con
+   tilde, para conservar el acento original de "confirma").
+
+   (El bug de `applyHypothesisUpdate` encontrado en esta misma ronda de
+   verificación en vivo queda documentado aparte, por su propio peso —
+   ver D-026.)
+
+**Consecuencias:** Ver `mobile/src/api/{reports,jobs}.ts`,
+`mobile/src/hooks/{use-reports-api,use-jobs-api}.ts`,
+`mobile/src/app/investigation/[id]/report.tsx`,
+`mobile/src/app/investigation/[id]/chat.tsx`,
+`mobile/src/constants/messages.ts`, `mobile/AGENTS.md`, y las 10
+pantallas listadas en el punto 6. `tsc`/`eslint` verificados (sin suite
+de tests automatizada en `mobile/`).
+
+---
+
+## D-026 — Bug real: `applyHypothesisUpdate` crasheaba el turno con `hypothesisId` inexistente; hallazgo de prioridad elevada sobre IDs de hipótesis en el prompt conversacional
+
+**Fecha:** 2026-07-27
+**Estado:** Resuelto (el fix); hallazgo de prompt — prioridad elevada, sin implementar
+
+**Contexto:** Al diagnosticar por qué "Analizar ahora" mostraba "No
+pudimos enviar el mensaje" (D-025 lo daba por relacionado), los logs
+del backend mostraron que ese texto no tenía nada que ver con el
+análisis — era un `POST .../messages` real fallando con `500`:
+
+```
+PrismaClientKnownRequestError: Invalid `tx.hypothesis.findFirstOrThrow()`
+invocation — An operation failed because it depends on one or more
+records that were required but not found.
+```
+
+`AiHypothesisUpdate.hypothesisId` (`ai-provider.interface.ts:71`) y
+`AiHypothesisUpdateDto.hypothesisId` (DTO) son ambos opcionales —
+"ausente = hipótesis nueva" por diseño. Un `hypothesisId` presente pero
+que no corresponde a ningún registro real no es ese caso normal — es
+una anomalía, y `findFirstOrThrow` la convertía en un 500 que tumbaba
+la transacción completa del turno (mensaje del usuario incluido).
+
+**Hallazgo de prioridad elevada, no una nota de pasada:**
+`backend/src/ai/prompts/build-context-prompt.ts` arma el contexto de
+cada turno conversacional **sin incluir el `id` real de ninguna
+hipótesis** — solo muestra estado/confianza/texto/razonamiento. Es
+decir, en el flujo conversacional la IA **nunca ve un `id` real**, así
+que no tiene forma legítima de producir uno válido: cualquier
+`hypothesisId` que devuelva ahí es, por diseño actual del prompt,
+no-verificable. Esto significa que la IA **nunca puede actualizar una
+hipótesis existente de forma confiable en este flujo — solo puede
+fingir que lo hace**. El bug de hoy es la primera manifestación visible
+de ese gap (mismo tratamiento que D-021 le dio a la nota de resumen de
+contexto: evidencia real de que el problema no es hipotético, sube de
+prioridad para una fase de pulido). Sigue sin implementarse ahora — es
+un cambio de prompt/schema más grande (¿exponer los IDs reales al
+modelo?), fuera del alcance de este fix puntual.
+
+**Decisión (el fix en sí):**
+
+1. `applyHypothesisUpdate` cambia `tx.hypothesis.findFirstOrThrow(...)`
+   por `tx.hypothesis.findFirst(...)` (nunca tira, devuelve `null`).
+2. Si no encuentra el registro: se **ignora esa actualización puntual**
+   (nunca se crea una hipótesis nueva para tapar la referencia rota —
+   RSIA-001, no inventar interpretaciones de datos que nadie pidió) y se
+   deja un `Logger.warn` con detalle forense completo (investigationId,
+   mensaje disparador, el `hypothesisId` recibido, el update completo).
+   El resto del turno (mensaje del usuario, mensaje de la IA, otras
+   actualizaciones de hipótesis en el mismo array, transición de estado)
+   sigue exactamente igual que antes.
+3. Se agrega `Logger` a `MessagesService` (mismo patrón que
+   `JobsWorker`).
+
+**Consecuencias:** Ver `backend/src/messages/messages.service.ts`
+(`applyHypothesisUpdate`, ahora retorna `Hypothesis | null`) y
+`backend/src/messages/messages.service.spec.ts` (test nuevo para el
+caso `hypothesisId` inexistente; los tests existentes migrados de
+`findFirstOrThrow` a `findFirst`). Suite completa (201 tests), lint y
+`tsc` verificados.
 
 ---

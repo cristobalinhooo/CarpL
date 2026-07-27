@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { Hypothesis, Message } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
@@ -22,6 +22,8 @@ export interface SendMessageResult {
 
 @Injectable()
 export class MessagesService {
+  private readonly logger = new Logger(MessagesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly investigationsService: InvestigationsService,
@@ -232,14 +234,13 @@ export class MessagesService {
 
       const hypotheses: Hypothesis[] = [];
       for (const update of aiResponse.hypothesisUpdates) {
-        hypotheses.push(
-          await this.applyHypothesisUpdate(
-            tx,
-            investigationId,
-            aiMessage.id,
-            update,
-          ),
+        const result = await this.applyHypothesisUpdate(
+          tx,
+          investigationId,
+          aiMessage.id,
+          update,
         );
+        if (result) hypotheses.push(result);
       }
 
       if (aiResponse.recommendedState !== effectiveStatus) {
@@ -256,16 +257,35 @@ export class MessagesService {
     });
   }
 
+  /**
+   * `hypothesisId` ausente = hipótesis nueva (comportamiento normal). Un
+   * `hypothesisId` presente pero que no corresponde a ningún registro
+   * real es una anomalía, no el caso normal — el prompt conversacional
+   * (`build-context-prompt.ts`) nunca le muestra a la IA el `id` real de
+   * ninguna hipótesis, así que cualquier valor que mande acá no es
+   * verificable por diseño actual (ver D-026: hallazgo de prioridad
+   * elevada, prompt/schema a revisar en una fase de pulido futura).
+   * Se ignora esa actualización puntual (nunca se inventa una hipótesis
+   * nueva para tapar una referencia rota — RSIA-001, D-026) dejando un
+   * warning con detalle forense, sin tumbar el resto del turno.
+   */
   private async applyHypothesisUpdate(
     tx: Prisma.TransactionClient,
     investigationId: string,
     triggeredByMessageId: string,
     update: AiHypothesisUpdate,
-  ): Promise<Hypothesis> {
+  ): Promise<Hypothesis | null> {
     if (update.hypothesisId) {
-      const previous = await tx.hypothesis.findFirstOrThrow({
+      const previous = await tx.hypothesis.findFirst({
         where: { id: update.hypothesisId, investigationId },
       });
+
+      if (!previous) {
+        this.logger.warn(
+          `hypothesisId "${update.hypothesisId}" recibido de la IA no existe para la investigación ${investigationId} (mensaje disparador ${triggeredByMessageId}) — se ignora esta actualización puntual, el resto del turno continúa. Update recibido: ${JSON.stringify(update)}`,
+        );
+        return null;
+      }
 
       const updated = await tx.hypothesis.update({
         where: { id: previous.id },

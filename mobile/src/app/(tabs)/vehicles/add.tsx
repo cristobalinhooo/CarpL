@@ -13,6 +13,13 @@ import { ApiError, NetworkError } from '@/api/client';
 import { BrandAutocompleteField } from '@/components/brand-autocomplete-field';
 import { FormField } from '@/components/form-field';
 import { PrimaryButton } from '@/components/primary-button';
+import {
+  INVALID_BRAND_MESSAGE,
+  INVALID_MODEL_MESSAGE,
+  INVALID_YEAR_MESSAGE,
+  NETWORK_ERROR_MESSAGE,
+  VEHICLE_SAVE_ERROR_MESSAGE,
+} from '@/constants/messages';
 import { useVehiclesApi } from '@/hooks/use-vehicles-api';
 import { theme } from '@/theme';
 
@@ -69,11 +76,11 @@ export default function AddVehicleScreen() {
         return;
       }
       // NOT_FOUND: sin proveedor real todavía, caída esperada.
-      revealManual('No encontramos datos para esa patente. Completá los datos manualmente.');
+      revealManual('No encontramos datos para esa patente. Completa los datos manualmente.');
     } catch (error) {
       if (error instanceof ApiError || error instanceof NetworkError) {
         revealManual(
-          'No pudimos consultar la patente en este momento. Completá los datos manualmente.',
+          'No pudimos consultar la patente en este momento. Completa los datos manualmente.',
         );
       }
     } finally {
@@ -83,12 +90,12 @@ export default function AddVehicleScreen() {
 
   function validate(): boolean {
     const errors: Record<string, string> = {};
-    if (brand.trim().length === 0) errors.brand = 'Ingresá la marca.';
-    if (model.trim().length === 0) errors.model = 'Ingresá el modelo.';
+    if (brand.trim().length === 0) errors.brand = INVALID_BRAND_MESSAGE;
+    if (model.trim().length === 0) errors.model = INVALID_MODEL_MESSAGE;
 
     const yearNumber = Number(year);
     if (!year.trim() || !Number.isInteger(yearNumber)) {
-      errors.year = 'Ingresá un año válido.';
+      errors.year = INVALID_YEAR_MESSAGE;
     } else if (yearNumber < 1900 || yearNumber > CURRENT_YEAR + 1) {
       errors.year = `El año debe estar entre 1900 y ${CURRENT_YEAR + 1}.`;
     }
@@ -96,7 +103,7 @@ export default function AddVehicleScreen() {
     if (mileage.trim().length > 0) {
       const mileageNumber = Number(mileage);
       if (!Number.isInteger(mileageNumber) || mileageNumber < 0) {
-        errors.mileage = 'Ingresá un kilometraje válido.';
+        errors.mileage = 'Ingresa un kilometraje válido.';
       }
     }
 
@@ -121,9 +128,9 @@ export default function AddVehicleScreen() {
       router.replace('/(tabs)/vehicles');
     } catch (error) {
       if (error instanceof NetworkError) {
-        setSubmitError('Sin conexión a internet. Verificá tu conexión e intentá de nuevo.');
+        setSubmitError(NETWORK_ERROR_MESSAGE);
       } else {
-        setSubmitError('No pudimos guardar el vehículo. Intentá de nuevo.');
+        setSubmitError(VEHICLE_SAVE_ERROR_MESSAGE);
       }
     } finally {
       setSaving(false);
@@ -140,7 +147,7 @@ export default function AddVehicleScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Por patente</Text>
             <Text style={styles.sectionBody}>
-              Ingresá la patente y buscamos los datos del vehículo por vos.
+              Ingresa la patente y buscamos los datos del vehículo por ti.
             </Text>
             <FormField
               label="Patente"

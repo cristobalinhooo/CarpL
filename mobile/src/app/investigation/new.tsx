@@ -19,6 +19,7 @@ import { EmptyState } from '@/components/empty-state';
 import { PrimaryButton } from '@/components/primary-button';
 import { VehicleSelector } from '@/components/vehicle-selector';
 import { COMMON_PROBLEMS } from '@/constants/common-problems';
+import { NETWORK_ERROR_MESSAGE } from '@/constants/messages';
 import { useInvestigationsApi } from '@/hooks/use-investigations-api';
 import { useVehiclesApi } from '@/hooks/use-vehicles-api';
 import { theme } from '@/theme';
@@ -94,7 +95,7 @@ export default function NewInvestigationScreen() {
 
     if (!selectedVehicleId) return;
     if (description.trim().length === 0) {
-      setDescriptionError('Describí lo que está ocurriendo.');
+      setDescriptionError('Describe lo que está ocurriendo.');
       return;
     }
 
@@ -109,9 +110,9 @@ export default function NewInvestigationScreen() {
       router.replace(`/investigation/${investigation.id}/chat`);
     } catch (error) {
       if (error instanceof NetworkError) {
-        setSubmitError('Sin conexión a internet. Verificá tu conexión e intentá de nuevo.');
+        setSubmitError(NETWORK_ERROR_MESSAGE);
       } else {
-        setSubmitError('No pudimos iniciar la investigación. Intentá de nuevo.');
+        setSubmitError('No pudimos iniciar la investigación. Intenta de nuevo.');
       }
     } finally {
       setSaving(false);
@@ -149,8 +150,8 @@ export default function NewInvestigationScreen() {
         <Stack.Screen options={{ title: 'Nueva investigación' }} />
         <EmptyState
           icon="directions-car"
-          title="Agregá un vehículo primero"
-          description="Necesitás un vehículo registrado para iniciar una investigación."
+          title="Agrega un vehículo primero"
+          description="Necesitas un vehículo registrado para iniciar una investigación."
           actionLabel="Agregar vehículo"
           onAction={() => router.push('/(tabs)/vehicles/add')}
         />
@@ -169,7 +170,7 @@ export default function NewInvestigationScreen() {
           <View style={styles.header}>
             <Text style={styles.title}>¿Qué está ocurriendo?</Text>
             <Text style={styles.body}>
-              Describí el comportamiento con tus propias palabras.
+              Describe el comportamiento con tus propias palabras.
             </Text>
           </View>
 

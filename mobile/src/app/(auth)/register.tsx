@@ -15,6 +15,11 @@ import * as authApi from '@/api/auth';
 import { ApiError, NetworkError } from '@/api/client';
 import { FormField } from '@/components/form-field';
 import { PrimaryButton } from '@/components/primary-button';
+import {
+  INVALID_EMAIL_MESSAGE,
+  NETWORK_ERROR_MESSAGE,
+  TOO_MANY_ATTEMPTS_MESSAGE,
+} from '@/constants/messages';
 import { theme } from '@/theme';
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -49,11 +54,11 @@ export default function RegisterScreen() {
     setFormError(null);
 
     if (fullName.trim().length === 0) {
-      setFormError('Ingresá tu nombre.');
+      setFormError('Ingresa tu nombre.');
       return;
     }
     if (!isValidEmail(email)) {
-      setFormError('Ingresá un correo electrónico válido.');
+      setFormError(INVALID_EMAIL_MESSAGE);
       return;
     }
     if (password.length < MIN_PASSWORD_LENGTH) {
@@ -61,7 +66,7 @@ export default function RegisterScreen() {
       return;
     }
     if (!consentGiven) {
-      setFormError('Aceptá los términos y la política de privacidad para continuar.');
+      setFormError('Acepta los términos y la política de privacidad para continuar.');
       return;
     }
 
@@ -75,13 +80,13 @@ export default function RegisterScreen() {
       setRegistered(true);
     } catch (error) {
       if (error instanceof ApiError && error.statusCode === 429) {
-        setFormError('Demasiados intentos. Esperá un momento e intentá de nuevo.');
+        setFormError(TOO_MANY_ATTEMPTS_MESSAGE);
       } else if (error instanceof ApiError) {
-        setFormError('No pudimos crear tu cuenta. Revisá los datos e intentá de nuevo.');
+        setFormError('No pudimos crear tu cuenta. Revisa los datos e intenta de nuevo.');
       } else if (error instanceof NetworkError) {
-        setFormError('Sin conexión a internet. Verificá tu conexión e intentá de nuevo.');
+        setFormError(NETWORK_ERROR_MESSAGE);
       } else {
-        setFormError('No pudimos crear tu cuenta. Intentá de nuevo.');
+        setFormError('No pudimos crear tu cuenta. Intenta de nuevo.');
       }
     } finally {
       setLoading(false);
@@ -92,10 +97,10 @@ export default function RegisterScreen() {
     return (
       <View style={styles.confirmationContainer}>
         <MaterialIcons name="mark-email-read" size={48} color={theme.colors.actionPrimary} />
-        <Text style={styles.confirmationTitle}>Revisá tu email</Text>
+        <Text style={styles.confirmationTitle}>Revisa tu email</Text>
         <Text style={styles.confirmationBody}>
           Te enviamos instrucciones para confirmar tu cuenta a {email.trim()}.
-          Confirmala antes de iniciar sesión.
+          Confírmala antes de iniciar sesión.
         </Text>
         <PrimaryButton
           label="Ir a iniciar sesión"
@@ -113,7 +118,7 @@ export default function RegisterScreen() {
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled">
         <Text style={styles.subtitle}>
-          Guardá tus vehículos, investigaciones e informes técnicos.
+          Guarda tus vehículos, investigaciones e informes técnicos.
         </Text>
 
         <View style={styles.form}>
@@ -177,7 +182,7 @@ export default function RegisterScreen() {
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>¿Ya tenés una cuenta?</Text>
+          <Text style={styles.footerText}>¿Ya tienes una cuenta?</Text>
           <Link href="/(auth)/login" style={styles.footerLink}>
             Iniciar sesión
           </Link>

@@ -12,6 +12,11 @@ import {
 import { ApiError, NetworkError } from '@/api/client';
 import { FormField } from '@/components/form-field';
 import { PrimaryButton } from '@/components/primary-button';
+import {
+  INVALID_EMAIL_MESSAGE,
+  NETWORK_ERROR_MESSAGE,
+  TOO_MANY_ATTEMPTS_MESSAGE,
+} from '@/constants/messages';
 import { useSession } from '@/hooks/use-session';
 import { theme } from '@/theme';
 
@@ -36,11 +41,11 @@ export default function LoginScreen() {
     setFormError(null);
 
     if (!isValidEmail(email)) {
-      setFormError('Ingresá un correo electrónico válido.');
+      setFormError(INVALID_EMAIL_MESSAGE);
       return;
     }
     if (password.length === 0) {
-      setFormError('Ingresá tu contraseña.');
+      setFormError('Ingresa tu contraseña.');
       return;
     }
 
@@ -53,11 +58,11 @@ export default function LoginScreen() {
       if (error instanceof ApiError && error.statusCode === 401) {
         setFormError('Credenciales inválidas.');
       } else if (error instanceof ApiError && error.statusCode === 429) {
-        setFormError('Demasiados intentos. Esperá un momento e intentá de nuevo.');
+        setFormError(TOO_MANY_ATTEMPTS_MESSAGE);
       } else if (error instanceof NetworkError) {
-        setFormError('Sin conexión a internet. Verificá tu conexión e intentá de nuevo.');
+        setFormError(NETWORK_ERROR_MESSAGE);
       } else {
-        setFormError('No se pudo iniciar sesión. Intentá de nuevo.');
+        setFormError('No se pudo iniciar sesión. Intenta de nuevo.');
       }
     } finally {
       setLoading(false);
@@ -73,7 +78,7 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>Bienvenido a CarPlus</Text>
         <Text style={styles.subtitle}>
-          Accedé para continuar tus investigaciones y consultar tus informes.
+          Accede para continuar tus investigaciones y consultar tus informes.
         </Text>
 
         <View style={styles.form}>
@@ -115,7 +120,7 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>¿No tenés una cuenta?</Text>
+          <Text style={styles.footerText}>¿No tienes una cuenta?</Text>
           <Link href="/(auth)/register" style={styles.footerLink}>
             Crear cuenta
           </Link>

@@ -20,7 +20,7 @@ interface FakePrisma {
   message: { findMany: jest.Mock; create: jest.Mock };
   hypothesis: {
     findMany: jest.Mock;
-    findFirstOrThrow: jest.Mock;
+    findFirst: jest.Mock;
     update: jest.Mock;
     create: jest.Mock;
   };
@@ -132,7 +132,7 @@ function createFakePrisma(): FakePrisma {
     message: { findMany: jest.fn(), create: jest.fn() },
     hypothesis: {
       findMany: jest.fn(),
-      findFirstOrThrow: jest.fn(),
+      findFirst: jest.fn(),
       update: jest.fn(),
       create: jest.fn(),
     },
@@ -389,7 +389,7 @@ describe('MessagesService', () => {
         confidence: 0.6 as unknown as Hypothesis['confidence'],
         status: 'ACTIVE',
       });
-      prisma.hypothesis.findFirstOrThrow.mockResolvedValue(previous);
+      prisma.hypothesis.findFirst.mockResolvedValue(previous);
       prisma.hypothesis.update.mockResolvedValue(
         fakeHypothesis({ id: 'existing-hyp', status: 'PARTIALLY_CONFIRMED' }),
       );
@@ -398,7 +398,7 @@ describe('MessagesService', () => {
         message: 'sí, es eso',
       });
 
-      expect(prisma.hypothesis.findFirstOrThrow).toHaveBeenCalledWith({
+      expect(prisma.hypothesis.findFirst).toHaveBeenCalledWith({
         where: { id: 'existing-hyp', investigationId: INVESTIGATION_ID },
       });
       expect(prisma.hypothesisRevision.create).toHaveBeenCalledWith({
@@ -413,6 +413,39 @@ describe('MessagesService', () => {
           triggeredByMessageId: 'ai-msg',
         },
       });
+    });
+
+    it('ignora una actualización con hypothesisId inexistente sin tumbar el resto del turno', async () => {
+      aiProvider.generateResponse.mockResolvedValue(
+        fakeAiResponse({
+          hypothesisUpdates: [
+            {
+              hypothesisId: 'alucinado-no-existe',
+              hypothesis: 'Pastillas de freno gastadas',
+              confidence: 0.85,
+              reasoning: 'Confirmado por el usuario',
+              status: 'PARTIALLY_CONFIRMED',
+            },
+          ],
+        }),
+      );
+      prisma.message.create
+        .mockResolvedValueOnce(fakeMessage({ id: 'user-msg' }))
+        .mockResolvedValueOnce(fakeMessage({ id: 'ai-msg', sender: 'AI' }));
+      prisma.hypothesis.findFirst.mockResolvedValue(null);
+
+      const result = await service.sendMessage(OWNER_ID, INVESTIGATION_ID, {
+        message: 'sí, es eso',
+      });
+
+      expect(prisma.hypothesis.findFirst).toHaveBeenCalledWith({
+        where: { id: 'alucinado-no-existe', investigationId: INVESTIGATION_ID },
+      });
+      expect(prisma.hypothesis.update).not.toHaveBeenCalled();
+      expect(prisma.hypothesis.create).not.toHaveBeenCalled();
+      expect(prisma.hypothesisRevision.create).not.toHaveBeenCalled();
+      expect(result.hypotheses).toHaveLength(0);
+      expect(result.aiMessage.id).toBe('ai-msg');
     });
 
     it('llama a transition dentro de la misma tx cuando recommendedState difiere del estado actual', async () => {

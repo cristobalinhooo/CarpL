@@ -143,8 +143,8 @@ export default function HistoryScreen() {
     return (
       <EmptyState
         icon="history"
-        title="Aún no tenés investigaciones"
-        description="Cuando notes un comportamiento inusual, iniciá una investigación."
+        title="Aún no tienes investigaciones"
+        description="Cuando notes un comportamiento inusual, inicia una investigación."
         actionLabel="Nueva investigación"
         onAction={() => router.push('/investigation/new')}
       />

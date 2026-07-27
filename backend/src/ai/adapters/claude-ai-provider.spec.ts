@@ -391,7 +391,7 @@ describe('ClaudeAiProvider', () => {
           model: 'claude-sonnet-5',
           tool_choice: { type: 'tool', name: 'submit_report' },
         }),
-        { timeout: 60000 },
+        { timeout: 60000, maxRetries: 0 },
       );
       expect(result.summary).toBe(validReportToolInput().summary);
       expect(result.hypotheses).toHaveLength(1);

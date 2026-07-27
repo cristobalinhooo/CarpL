@@ -6,6 +6,7 @@ import type { Vehicle } from '@/api/vehicles';
 import { EmptyState } from '@/components/empty-state';
 import { PrimaryButton } from '@/components/primary-button';
 import { VehicleCard } from '@/components/vehicle-card';
+import { NO_VEHICLES_TITLE } from '@/constants/messages';
 import { useVehiclesApi } from '@/hooks/use-vehicles-api';
 import { theme } from '@/theme';
 
@@ -70,8 +71,8 @@ export default function HomeScreen() {
     return (
       <EmptyState
         icon="directions-car"
-        title="Aún no tenés vehículos"
-        description="Agregá tu vehículo para empezar a investigar un problema."
+        title={NO_VEHICLES_TITLE}
+        description="Agrega tu vehículo para empezar a investigar un problema."
         actionLabel="Agregar vehículo"
         onAction={() => router.push('/(tabs)/vehicles/add')}
         note="Tu vehículo y tus investigaciones aparecerán acá cuando los agregues."

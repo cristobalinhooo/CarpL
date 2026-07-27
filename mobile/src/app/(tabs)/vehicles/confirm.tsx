@@ -14,6 +14,13 @@ import { NetworkError } from '@/api/client';
 import { BrandAutocompleteField } from '@/components/brand-autocomplete-field';
 import { FormField } from '@/components/form-field';
 import { PrimaryButton } from '@/components/primary-button';
+import {
+  INVALID_BRAND_MESSAGE,
+  INVALID_MODEL_MESSAGE,
+  INVALID_YEAR_MESSAGE,
+  NETWORK_ERROR_MESSAGE,
+  VEHICLE_SAVE_ERROR_MESSAGE,
+} from '@/constants/messages';
 import { useVehiclesApi } from '@/hooks/use-vehicles-api';
 import { theme } from '@/theme';
 
@@ -62,12 +69,12 @@ export default function ConfirmVehicleScreen() {
 
   function validate(): boolean {
     const errors: Record<string, string> = {};
-    if (brand.trim().length === 0) errors.brand = 'Ingresá la marca.';
-    if (model.trim().length === 0) errors.model = 'Ingresá el modelo.';
+    if (brand.trim().length === 0) errors.brand = INVALID_BRAND_MESSAGE;
+    if (model.trim().length === 0) errors.model = INVALID_MODEL_MESSAGE;
 
     const yearNumber = Number(year);
     if (!year.trim() || !Number.isInteger(yearNumber)) {
-      errors.year = 'Ingresá un año válido.';
+      errors.year = INVALID_YEAR_MESSAGE;
     } else if (yearNumber < 1900 || yearNumber > CURRENT_YEAR + 1) {
       errors.year = `El año debe estar entre 1900 y ${CURRENT_YEAR + 1}.`;
     }
@@ -98,9 +105,9 @@ export default function ConfirmVehicleScreen() {
       router.replace('/(tabs)/vehicles');
     } catch (error) {
       if (error instanceof NetworkError) {
-        setSubmitError('Sin conexión a internet. Verificá tu conexión e intentá de nuevo.');
+        setSubmitError(NETWORK_ERROR_MESSAGE);
       } else {
-        setSubmitError('No pudimos guardar el vehículo. Intentá de nuevo.');
+        setSubmitError(VEHICLE_SAVE_ERROR_MESSAGE);
       }
     } finally {
       setSaving(false);
@@ -115,9 +122,9 @@ export default function ConfirmVehicleScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.header}>
-            <Text style={styles.title}>Confirmá los datos</Text>
+            <Text style={styles.title}>Confirma los datos</Text>
             <Text style={styles.body}>
-              Encontramos esta información para tu vehículo. Revisala y corregí lo que
+              Encontramos esta información para tu vehículo. Revísala y corrige lo que
               necesites antes de guardar.
             </Text>
           </View>

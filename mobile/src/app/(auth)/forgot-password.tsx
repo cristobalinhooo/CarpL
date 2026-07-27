@@ -14,6 +14,7 @@ import * as authApi from '@/api/auth';
 import { NetworkError } from '@/api/client';
 import { FormField } from '@/components/form-field';
 import { PrimaryButton } from '@/components/primary-button';
+import { INVALID_EMAIL_MESSAGE, NETWORK_ERROR_MESSAGE } from '@/constants/messages';
 import { theme } from '@/theme';
 
 /**
@@ -37,7 +38,7 @@ export default function ForgotPasswordScreen() {
     setFormError(null);
 
     if (!isValidEmail(email)) {
-      setFormError('Ingresá un correo electrónico válido.');
+      setFormError(INVALID_EMAIL_MESSAGE);
       return;
     }
 
@@ -47,9 +48,9 @@ export default function ForgotPasswordScreen() {
       setSent(true);
     } catch (error) {
       if (error instanceof NetworkError) {
-        setFormError('Sin conexión a internet. Verificá tu conexión e intentá de nuevo.');
+        setFormError(NETWORK_ERROR_MESSAGE);
       } else {
-        setFormError('No pudimos procesar la solicitud. Intentá de nuevo.');
+        setFormError('No pudimos procesar la solicitud. Intenta de nuevo.');
       }
     } finally {
       setLoading(false);
@@ -60,7 +61,7 @@ export default function ForgotPasswordScreen() {
     return (
       <View style={styles.container}>
         <MaterialIcons name="mark-email-read" size={48} color={theme.colors.actionPrimary} />
-        <Text style={styles.title}>Revisá tu correo</Text>
+        <Text style={styles.title}>Revisa tu correo</Text>
         <Text style={styles.body}>
           Si existe una cuenta asociada a {email.trim()}, te enviamos
           instrucciones para restablecer tu acceso.
@@ -83,7 +84,7 @@ export default function ForgotPasswordScreen() {
           <MaterialIcons name="mail" size={48} color={theme.colors.actionPrimary} />
           <Text style={styles.title}>Restablece tu acceso</Text>
           <Text style={styles.body}>
-            Introducí el correo de tu cuenta. Te enviaremos instrucciones si
+            Introduce el correo de tu cuenta. Te enviaremos instrucciones si
             existe una cuenta asociada.
           </Text>
         </View>

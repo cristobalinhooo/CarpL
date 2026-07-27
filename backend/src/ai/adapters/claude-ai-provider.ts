@@ -405,7 +405,10 @@ export class ClaudeAiProvider implements AiProvider {
     // objetivo de ≤15s para la primera respuesta del chat, en vivo frente
     // al usuario) — generateReport() corre asíncrono vía `jobs`, sin esa
     // misma presión de tiempo real, y su contexto/salida son mucho más
-    // grandes.
+    // grandes. maxRetries: 0 por el mismo motivo que D-021 se lo dio a
+    // generateResponse(): mejor fallar rápido y claro (el frontend ya
+    // tiene su propia ventana de polling con margen — D-025/D-026) que
+    // reintentar en silencio y triplicar la espera real del job.
     const reportTimeoutMs = this.config.get<number>('aiReportTimeoutMs');
 
     const response = await this.client.messages.create(
@@ -419,7 +422,7 @@ export class ClaudeAiProvider implements AiProvider {
         tools: [REPORT_TOOL],
         tool_choice: { type: 'tool', name: REPORT_TOOL_NAME },
       },
-      { timeout: reportTimeoutMs },
+      { timeout: reportTimeoutMs, maxRetries: 0 },
     );
 
     const toolUse = response.content.find(

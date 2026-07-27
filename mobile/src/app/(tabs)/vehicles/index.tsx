@@ -7,6 +7,7 @@ import type { Vehicle } from '@/api/vehicles';
 import { EmptyState } from '@/components/empty-state';
 import { PrimaryButton } from '@/components/primary-button';
 import { VehicleCard } from '@/components/vehicle-card';
+import { NO_VEHICLES_TITLE } from '@/constants/messages';
 import { useVehiclesApi } from '@/hooks/use-vehicles-api';
 import { theme } from '@/theme';
 
@@ -66,8 +67,8 @@ export default function VehiclesScreen() {
     return (
       <EmptyState
         icon="directions-car"
-        title="Aún no tenés vehículos"
-        description="Agregá tu primer vehículo por patente o de forma manual."
+        title={NO_VEHICLES_TITLE}
+        description="Agrega tu primer vehículo por patente o de forma manual."
         actionLabel="Agregar vehículo"
         onAction={() => router.push('/(tabs)/vehicles/add')}
         note="Tus vehículos aparecerán acá cuando los agregues."

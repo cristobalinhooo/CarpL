@@ -1,10 +1,11 @@
 import { useHeaderHeight } from '@react-navigation/elements';
-import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -22,15 +23,26 @@ import { ChatBubble } from '@/components/chat-bubble';
 import { EvidenceCard } from '@/components/evidence-card';
 import { HeaderBackButton } from '@/components/header-back-button';
 import { PrimaryButton } from '@/components/primary-button';
+import { NETWORK_ERROR_MESSAGE } from '@/constants/messages';
 import { useEvidenceApi } from '@/hooks/use-evidence-api';
 import { useInvestigationsApi } from '@/hooks/use-investigations-api';
+import { useJobsApi } from '@/hooks/use-jobs-api';
 import { useMessagesApi } from '@/hooks/use-messages-api';
+import { useReportsApi } from '@/hooks/use-reports-api';
 import { useVehiclesApi } from '@/hooks/use-vehicles-api';
 import { theme } from '@/theme';
 
 const MAX_MESSAGE_LENGTH = 4000;
 const POLL_INTERVAL_MS = 3000;
 const MAX_POLL_ATTEMPTS = 10;
+// Ventana propia para el polling del informe — nunca reutilizar la de
+// evidencia (Claude Vision, mucho más rápido). generateReport() corre
+// con AI_REPORT_TIMEOUT_MS = 60s en el backend (más reintentos propios
+// del SDK, no cubiertos acá) — 30 intentos × 3s = 90s le da un margen
+// real de +50% sobre esos 60s (latencia de encolado del `JobsWorker`
+// incluida), en vez de apenas empatarlo.
+const REPORT_POLL_INTERVAL_MS = 3000;
+const REPORT_MAX_POLL_ATTEMPTS = 30;
 
 // Réplica exacta de MessagesService.sendMessage/EvidenceService.uploadEvidence
 // (hallazgo 5 del plan de esta fase) — WAITING_EVIDENCE bloquea mensajes
@@ -51,6 +63,12 @@ const EVIDENCE_ALLOWED_STATUSES: InvestigationStatus[] = [
 function statusBadge(status: InvestigationStatus): { label: string; color: string } {
   if (status === 'REPORT_GENERATED') {
     return { label: 'Informe disponible', color: theme.colors.success };
+  }
+  if (status === 'READY_TO_ANALYZE') {
+    return { label: 'Listo para analizar', color: theme.colors.success };
+  }
+  if (status === 'ANALYZING') {
+    return { label: 'Generando informe', color: theme.colors.warning };
   }
   if (status === 'CLOSED') {
     return { label: 'Archivado', color: theme.colors.textPrimary };
@@ -81,13 +99,17 @@ type ScreenState = 'loading' | 'error' | 'ready';
 /**
  * Chat de investigación (Figura 9, Technical Spec §12.3): conversación
  * + evidencia en una sola línea de tiempo cronológica. Sin "Ver caso"
- * ni "Analizar ahora" (fases futuras, hallazgo 7 del plan). La
- * descripción inicial (Fase 4) pre-completa el campo de mensaje (una
- * sola vez, si todavía no hay mensajes) en vez de mostrarse duplicada
- * como tarjeta fija (D-022) — sigue siendo editable y nunca se envía
- * sola: el usuario tiene que tocar "Enviar" igual que con cualquier
- * otro mensaje, nunca como mensaje de IA fantasma (hallazgo 1) —
- * ningún mensaje con costo se envía sin que el usuario lo confirme.
+ * (fase futura). "Analizar ahora" (Fase 7 frontend) aparece junto al
+ * composer cuando `currentStatus === 'READY_TO_ANALYZE'` — no lo
+ * reemplaza, porque ese estado sigue permitiendo seguir conversando
+ * (D-012); "Ver informe" aparece en el header cuando ya existe uno
+ * (`REPORT_GENERATED`). La descripción inicial (Fase 4) pre-completa
+ * el campo de mensaje (una sola vez, si todavía no hay mensajes) en
+ * vez de mostrarse duplicada como tarjeta fija (D-022) — sigue siendo
+ * editable y nunca se envía sola: el usuario tiene que tocar "Enviar"
+ * igual que con cualquier otro mensaje, nunca como mensaje de IA
+ * fantasma (hallazgo 1) — ningún mensaje con costo se envía sin que el
+ * usuario lo confirme.
  */
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -99,10 +121,13 @@ export default function ChatScreen() {
   // con keyboardVerticalOffset={headerHeight}, patrón recomendado por
   // la doc de react-navigation para esta combinación exacta.
   const headerHeight = useHeaderHeight();
+  const router = useRouter();
   const { findOne } = useInvestigationsApi();
   const { findAll: findAllMessages, send } = useMessagesApi();
   const { findAll: findAllEvidence, upload } = useEvidenceApi();
   const { findAll: findAllVehicles } = useVehiclesApi();
+  const { requestAnalysis } = useReportsApi();
+  const { getStatus: getJobStatus } = useJobsApi();
 
   const [state, setState] = useState<ScreenState>('loading');
   const [investigation, setInvestigation] = useState<Investigation | null>(null);
@@ -112,9 +137,11 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Se pre-completa `draft` con la descripción inicial una sola vez (si
   // todavía no hay ningún mensaje) — nunca de nuevo en refocos/polls
   // posteriores, para no pisar lo que el usuario ya haya escrito o
@@ -152,6 +179,7 @@ export default function ChatScreen() {
       void load();
       return () => {
         if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+        if (reportPollTimeoutRef.current) clearTimeout(reportPollTimeoutRef.current);
       };
     }, [load]),
   );
@@ -204,6 +232,54 @@ export default function ChatScreen() {
     }, POLL_INTERVAL_MS);
   }
 
+  // Mismo patrón recursivo que `pollEvidenceUntilDone`. En `FAILED`, el
+  // backend ya devolvió la investigación a `READY_TO_ANALYZE` (D-015
+  // punto 2) — pero eso recién se reflejaría en un reload; acá se
+  // refleja al toque bajando `analyzing` a `false` (nunca se tocó
+  // `investigation.currentStatus`, así que el botón "Analizar ahora"
+  // reaparece de inmediato en la misma pantalla).
+  function pollReportJob(jobId: string, attempt = 0) {
+    if (attempt >= REPORT_MAX_POLL_ATTEMPTS) {
+      setAnalyzing(false);
+      setSubmitError('El análisis está tardando más de lo esperado. Intenta de nuevo en un momento.');
+      return;
+    }
+    reportPollTimeoutRef.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const job = await getJobStatus(jobId);
+          if (job.status === 'DONE') {
+            setAnalyzing(false);
+            router.push(`/investigation/${id}/report`);
+          } else if (job.status === 'FAILED') {
+            setAnalyzing(false);
+            setSubmitError('No pudimos generar el informe. Intenta de nuevo.');
+          } else {
+            pollReportJob(jobId, attempt + 1);
+          }
+        } catch {
+          pollReportJob(jobId, attempt + 1);
+        }
+      })();
+    }, REPORT_POLL_INTERVAL_MS);
+  }
+
+  async function handleAnalyze() {
+    setSubmitError(null);
+    setAnalyzing(true);
+    try {
+      const { jobId } = await requestAnalysis(id);
+      pollReportJob(jobId);
+    } catch (error) {
+      setAnalyzing(false);
+      if (error instanceof NetworkError) {
+        setSubmitError(NETWORK_ERROR_MESSAGE);
+      } else {
+        setSubmitError('No pudimos iniciar el análisis. Intenta de nuevo.');
+      }
+    }
+  }
+
   async function handleSend() {
     setSubmitError(null);
     if (draft.trim().length === 0) return;
@@ -216,9 +292,9 @@ export default function ChatScreen() {
       await refreshInvestigation();
     } catch (error) {
       if (error instanceof NetworkError) {
-        setSubmitError('Sin conexión a internet. Verificá tu conexión e intentá de nuevo.');
+        setSubmitError(NETWORK_ERROR_MESSAGE);
       } else {
-        setSubmitError('No pudimos enviar el mensaje. Intentá de nuevo.');
+        setSubmitError('No pudimos enviar el mensaje. Intenta de nuevo.');
       }
     } finally {
       setSending(false);
@@ -238,9 +314,9 @@ export default function ChatScreen() {
       pollEvidenceUntilDone();
     } catch (error) {
       if (error instanceof NetworkError) {
-        setSubmitError('Sin conexión a internet. Verificá tu conexión e intentá de nuevo.');
+        setSubmitError(NETWORK_ERROR_MESSAGE);
       } else {
-        setSubmitError('No pudimos subir la evidencia. Intentá de nuevo.');
+        setSubmitError('No pudimos subir la evidencia. Intenta de nuevo.');
       }
     }
   }
@@ -295,12 +371,19 @@ export default function ChatScreen() {
               {vehicle.brand} {vehicle.model} {vehicle.year}
             </Text>
           ) : null}
+          {investigation.currentStatus === 'REPORT_GENERATED' ? (
+            <Pressable
+              style={styles.viewReportLink}
+              onPress={() => router.push(`/investigation/${id}/report`)}>
+              <Text style={styles.viewReportLinkText}>Ver informe</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
           {timeline.length === 0 ? (
             <Text style={styles.hintText}>
-              Escribí tu primer mensaje para que la IA empiece a investigar.
+              Escribe tu primer mensaje para que la IA empiece a investigar.
             </Text>
           ) : (
             timeline.map((item) =>
@@ -324,8 +407,16 @@ export default function ChatScreen() {
         <View style={styles.composerContainer}>
           {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
           {blockedReason ? <Text style={styles.blockedText}>{blockedReason}</Text> : null}
+          {analyzing ? (
+            <View style={styles.analyzingRow}>
+              <ActivityIndicator color={theme.colors.actionPrimary} />
+              <Text style={styles.blockedText}>Estamos generando el informe de este caso.</Text>
+            </View>
+          ) : investigation.currentStatus === 'READY_TO_ANALYZE' ? (
+            <PrimaryButton label="Analizar ahora" onPress={() => void handleAnalyze()} />
+          ) : null}
           <View style={styles.composerRow}>
-            <AttachmentMenu disabled={!canAttach} onPicked={handleAttachmentPicked} />
+            <AttachmentMenu disabled={!canAttach || analyzing} onPicked={handleAttachmentPicked} />
             <TextInput
               style={styles.input}
               placeholder="Escribe una respuesta..."
@@ -334,13 +425,13 @@ export default function ChatScreen() {
               onChangeText={setDraft}
               multiline
               maxLength={MAX_MESSAGE_LENGTH}
-              editable={!blockedReason && !sending}
+              editable={!blockedReason && !sending && !analyzing}
             />
             <PrimaryButton
               label="Enviar"
               onPress={() => void handleSend()}
               loading={sending}
-              disabled={!!blockedReason}
+              disabled={!!blockedReason || analyzing}
             />
           </View>
         </View>
@@ -391,6 +482,13 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     opacity: 0.7,
   },
+  viewReportLink: {
+    marginLeft: 'auto',
+  },
+  viewReportLinkText: {
+    ...theme.typography.label,
+    color: theme.colors.actionPrimary,
+  },
   content: {
     flexGrow: 1,
     padding: theme.spacing.space16,
@@ -418,6 +516,11 @@ const styles = StyleSheet.create({
     ...theme.typography.caption,
     color: theme.colors.textPrimary,
     opacity: 0.7,
+  },
+  analyzingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.space8,
   },
   composerRow: {
     flexDirection: 'row',
