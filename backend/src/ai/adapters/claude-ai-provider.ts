@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import {
   Inject,
   Injectable,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -280,6 +281,7 @@ function isSupportedImageMediaType(
 @Injectable()
 export class ClaudeAiProvider implements AiProvider {
   readonly name = 'claude';
+  private readonly logger = new Logger(ClaudeAiProvider.name);
 
   constructor(
     @Inject(ANTHROPIC_CLIENT) private readonly client: Anthropic,
@@ -438,6 +440,15 @@ export class ClaudeAiProvider implements AiProvider {
     const instance = plainToInstance(AiReportContentDto, toolUse.input);
     const errors = validateSync(instance, { whitelist: true });
     if (errors.length > 0) {
+      // Antes se descartaba `errors` sin registrarlo — quedaba sin forma
+      // de saber qué campo específico rechazó la IA. Se loguea el
+      // detalle completo (propiedad, restricciones violadas, y el input
+      // crudo que mandó la IA) para poder diagnosticar la próxima vez
+      // que pase, sin reproducirlo a ciegas.
+      this.logger.error(
+        'generateReport() devolvió un informe con formato inesperado',
+        JSON.stringify({ errors, rawInput: toolUse.input }),
+      );
       throw new ServiceUnavailableException(
         'El proveedor de IA devolvió un informe con formato inesperado',
       );

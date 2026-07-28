@@ -23,10 +23,10 @@ import { ChatBubble } from '@/components/chat-bubble';
 import { EvidenceCard } from '@/components/evidence-card';
 import { HeaderBackButton } from '@/components/header-back-button';
 import { PrimaryButton } from '@/components/primary-button';
+import { TypingIndicator } from '@/components/typing-indicator';
 import { NETWORK_ERROR_MESSAGE } from '@/constants/messages';
 import { useEvidenceApi } from '@/hooks/use-evidence-api';
 import { useInvestigationsApi } from '@/hooks/use-investigations-api';
-import { useJobsApi } from '@/hooks/use-jobs-api';
 import { useMessagesApi } from '@/hooks/use-messages-api';
 import { useReportsApi } from '@/hooks/use-reports-api';
 import { useVehiclesApi } from '@/hooks/use-vehicles-api';
@@ -35,12 +35,14 @@ import { theme } from '@/theme';
 const MAX_MESSAGE_LENGTH = 4000;
 const POLL_INTERVAL_MS = 3000;
 const MAX_POLL_ATTEMPTS = 10;
-// Ventana propia para el polling del informe — nunca reutilizar la de
+// Ventana propia para el polling del análisis — nunca reutilizar la de
 // evidencia (Claude Vision, mucho más rápido). generateReport() corre
 // con AI_REPORT_TIMEOUT_MS = 60s en el backend (más reintentos propios
 // del SDK, no cubiertos acá) — 30 intentos × 3s = 90s le da un margen
 // real de +50% sobre esos 60s (latencia de encolado del `JobsWorker`
-// incluida), en vez de apenas empatarlo.
+// incluida), en vez de apenas empatarlo. Este polling consulta
+// `GET /investigations/{id}` (no un jobId) — ver el comentario sobre
+// `ensureAnalysisPolling` más abajo para el porqué.
 const REPORT_POLL_INTERVAL_MS = 3000;
 const REPORT_MAX_POLL_ATTEMPTS = 30;
 
@@ -127,7 +129,6 @@ export default function ChatScreen() {
   const { findAll: findAllEvidence, upload } = useEvidenceApi();
   const { findAll: findAllVehicles } = useVehiclesApi();
   const { requestAnalysis } = useReportsApi();
-  const { getStatus: getJobStatus } = useJobsApi();
 
   const [state, setState] = useState<ScreenState>('loading');
   const [investigation, setInvestigation] = useState<Investigation | null>(null);
@@ -137,16 +138,93 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
+  // Solo cubre la espera de la llamada inicial `POST .../report` (un
+  // par de cientos de ms) — nunca el análisis en sí. "Está analizando"
+  // ya no es una bandera local separada: se deriva directamente de
+  // `investigation.currentStatus === 'ANALYZING'` (ver el render más
+  // abajo), la misma fuente que ya usa el badge — no pueden
+  // desincronizarse porque son literalmente el mismo dato.
+  const [requestingAnalysis, setRequestingAnalysis] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reportPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const analysisPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // `true` mientras haya un ciclo de `pollAnalysisStatus` corriendo.
+  // Se consulta desde `load()` (que ya corre en cada foco de pantalla)
+  // para retomar el polling solo si hace falta — nunca se asume que
+  // sigue corriendo solo porque `handleAnalyze` lo arrancó una vez.
+  const analysisPollActiveRef = useRef(false);
   // Se pre-completa `draft` con la descripción inicial una sola vez (si
   // todavía no hay ningún mensaje) — nunca de nuevo en refocos/polls
   // posteriores, para no pisar lo que el usuario ya haya escrito o
   // borrado (hallazgo 5, D-022).
   const prefillDoneRef = useRef(false);
+
+  const refreshInvestigation = useCallback(async (): Promise<Investigation | null> => {
+    try {
+      const updated = await findOne(id);
+      setInvestigation(updated);
+      return updated;
+    } catch {
+      // El estado local queda como estaba; no es crítico si esta
+      // actualización puntual falla.
+      return null;
+    }
+  }, [id, findOne]);
+
+  // A diferencia del polling anterior (atado a un jobId vivo solo en
+  // esta closure), este consulta la fuente de verdad real —
+  // `investigation.currentStatus`, vía `refreshInvestigation()` — así
+  // que no importa si el ciclo se interrumpió y se retomó desde cero
+  // en `load()`: el resultado es el mismo. D-015 garantiza que
+  // `ANALYZING` solo sale hacia `REPORT_GENERATED` (éxito) o
+  // `READY_TO_ANALYZE` (falla, recuperación RC-006) — no hace falta
+  // ningún jobId para distinguir el desenlace.
+  const pollAnalysisStatus = useCallback(
+    (attempt = 0) => {
+      // `analysisPollActiveRef` es la señal autoritativa de "seguir o
+      // no" — se revisa en cada paso (no solo al arrancar) porque el
+      // cleanup de `useFocusEffect` la apaga ante cualquier blur; sin
+      // este chequeo, un ciclo ya en vuelo seguiría reprogramándose
+      // solo, ignorando el blur, y además chocaría con un segundo
+      // ciclo que `load()` arranque al recuperar el foco.
+      if (!analysisPollActiveRef.current) return;
+      if (attempt >= REPORT_MAX_POLL_ATTEMPTS) {
+        analysisPollActiveRef.current = false;
+        setSubmitError(
+          'Esto está tardando más de lo esperado. Vas a ver el resultado la próxima vez que abras esta pantalla.',
+        );
+        return;
+      }
+      analysisPollTimeoutRef.current = setTimeout(() => {
+        void (async () => {
+          if (!analysisPollActiveRef.current) return;
+          const updated = await refreshInvestigation();
+          if (!analysisPollActiveRef.current) return;
+          if (updated && updated.currentStatus !== 'ANALYZING') {
+            analysisPollActiveRef.current = false;
+            if (updated.currentStatus === 'REPORT_GENERATED') {
+              router.push(`/investigation/${id}/report`);
+            } else {
+              setSubmitError('No pudimos generar el informe. Intenta de nuevo.');
+            }
+            return;
+          }
+          pollAnalysisStatus(attempt + 1);
+        })();
+      }, REPORT_POLL_INTERVAL_MS);
+    },
+    [refreshInvestigation, id, router],
+  );
+
+  // Único punto de entrada para arrancar el polling — tanto
+  // `handleAnalyze` como `load()` pasan por acá, así que nunca hay dos
+  // ciclos corriendo en paralelo (`analysisPollActiveRef`).
+  const ensureAnalysisPolling = useCallback(() => {
+    if (analysisPollActiveRef.current) return;
+    analysisPollActiveRef.current = true;
+    pollAnalysisStatus();
+  }, [pollAnalysisStatus]);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -168,18 +246,34 @@ export default function ChatScreen() {
           setDraft(investigationResult.description);
         }
       }
+      // Bug real encontrado en vivo: el polling anterior vivía en una
+      // variable de closure (jobId) atada a un solo `setTimeout` — el
+      // cleanup de `useFocusEffect` lo cancelaba ante cualquier blur de
+      // pantalla (bloqueo, cambiar de app, otra pantalla) y nada lo
+      // retomaba nunca. Acá, cada vez que la pantalla recupera el foco
+      // y `load()` corre, se re-deriva la verdad desde el servidor: si
+      // sigue `ANALYZING`, se asegura que haya un poll corriendo.
+      if (investigationResult.currentStatus === 'ANALYZING') {
+        ensureAnalysisPolling();
+      }
       setState('ready');
     } catch {
       setState('error');
     }
-  }, [id, findOne, findAllMessages, findAllEvidence, findAllVehicles]);
+  }, [id, findOne, findAllMessages, findAllEvidence, findAllVehicles, ensureAnalysisPolling]);
 
   useFocusEffect(
     useCallback(() => {
       void load();
       return () => {
         if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
-        if (reportPollTimeoutRef.current) clearTimeout(reportPollTimeoutRef.current);
+        if (analysisPollTimeoutRef.current) clearTimeout(analysisPollTimeoutRef.current);
+        // Se apaga incondicionalmente (no solo si había un timeout
+        // pendiente) — un paso del poll puede estar a mitad de un
+        // `await refreshInvestigation()` en este momento exacto, sin
+        // ningún timeout vivo que cancelar; el chequeo de esta bandera
+        // dentro de `pollAnalysisStatus` es lo que realmente lo detiene.
+        analysisPollActiveRef.current = false;
       };
     }, [load]),
   );
@@ -201,17 +295,7 @@ export default function ChatScreen() {
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true });
-  }, [timeline.length]);
-
-  async function refreshInvestigation() {
-    try {
-      const updated = await findOne(id);
-      setInvestigation(updated);
-    } catch {
-      // El estado local queda como estaba; no es crítico si esta
-      // actualización puntual falla.
-    }
-  }
+  }, [timeline.length, sending]);
 
   function pollEvidenceUntilDone(attempt = 0) {
     if (attempt >= MAX_POLL_ATTEMPTS) return;
@@ -232,65 +316,59 @@ export default function ChatScreen() {
     }, POLL_INTERVAL_MS);
   }
 
-  // Mismo patrón recursivo que `pollEvidenceUntilDone`. En `FAILED`, el
-  // backend ya devolvió la investigación a `READY_TO_ANALYZE` (D-015
-  // punto 2) — pero eso recién se reflejaría en un reload; acá se
-  // refleja al toque bajando `analyzing` a `false` (nunca se tocó
-  // `investigation.currentStatus`, así que el botón "Analizar ahora"
-  // reaparece de inmediato en la misma pantalla).
-  function pollReportJob(jobId: string, attempt = 0) {
-    if (attempt >= REPORT_MAX_POLL_ATTEMPTS) {
-      setAnalyzing(false);
-      setSubmitError('El análisis está tardando más de lo esperado. Intenta de nuevo en un momento.');
-      return;
-    }
-    reportPollTimeoutRef.current = setTimeout(() => {
-      void (async () => {
-        try {
-          const job = await getJobStatus(jobId);
-          if (job.status === 'DONE') {
-            setAnalyzing(false);
-            router.push(`/investigation/${id}/report`);
-          } else if (job.status === 'FAILED') {
-            setAnalyzing(false);
-            setSubmitError('No pudimos generar el informe. Intenta de nuevo.');
-          } else {
-            pollReportJob(jobId, attempt + 1);
-          }
-        } catch {
-          pollReportJob(jobId, attempt + 1);
-        }
-      })();
-    }, REPORT_POLL_INTERVAL_MS);
-  }
-
   async function handleAnalyze() {
     setSubmitError(null);
-    setAnalyzing(true);
+    setRequestingAnalysis(true);
     try {
-      const { jobId } = await requestAnalysis(id);
-      pollReportJob(jobId);
+      await requestAnalysis(id);
+      await refreshInvestigation();
+      ensureAnalysisPolling();
     } catch (error) {
-      setAnalyzing(false);
       if (error instanceof NetworkError) {
         setSubmitError(NETWORK_ERROR_MESSAGE);
       } else {
         setSubmitError('No pudimos iniciar el análisis. Intenta de nuevo.');
       }
+    } finally {
+      setRequestingAnalysis(false);
     }
   }
 
   async function handleSend() {
     setSubmitError(null);
-    if (draft.trim().length === 0) return;
+    const text = draft.trim();
+    if (text.length === 0) return;
 
+    // Se muestra el mensaje del usuario de inmediato (optimista) en vez
+    // de esperar la respuesta completa del backend — hasta ahora la
+    // pantalla se quedaba sin ningún cambio visual hasta que userMessage
+    // + aiMessage llegaban juntos. El `TypingIndicator` cubre la espera
+    // de la respuesta de la IA; nunca streaming real (D-023).
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage: Message = {
+      id: tempId,
+      investigationId: id,
+      sender: 'USER',
+      message: text,
+      isSafetyStop: false,
+      safetyMessage: null,
+      quickReplies: [],
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimisticMessage]);
+    setDraft('');
     setSending(true);
     try {
-      const result = await send(id, draft.trim());
-      setMessages((prev) => [...prev, result.userMessage, result.aiMessage]);
-      setDraft('');
+      const result = await send(id, text);
+      setMessages((prev) => [
+        ...prev.filter((m) => m.id !== tempId),
+        result.userMessage,
+        result.aiMessage,
+      ]);
       await refreshInvestigation();
     } catch (error) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setDraft(text);
       if (error instanceof NetworkError) {
         setSubmitError(NETWORK_ERROR_MESSAGE);
       } else {
@@ -351,6 +429,9 @@ export default function ChatScreen() {
   const badge = statusBadge(investigation.currentStatus);
   const blockedReason = messageBlockedReason(investigation.currentStatus);
   const canAttach = EVIDENCE_ALLOWED_STATUSES.includes(investigation.currentStatus);
+  // Mismo dato que ya lee `badge` — nunca puede desincronizarse del
+  // header porque es literalmente la misma fuente.
+  const isAnalyzing = investigation.currentStatus === 'ANALYZING';
   // Los quick replies solo tienen sentido en la última pregunta todavía
   // "abierta" — un mensaje de la IA más antiguo ya quedó respondido.
   const lastAiMessageId = [...messages].reverse().find((m) => m.sender === 'AI')?.id;
@@ -402,21 +483,28 @@ export default function ChatScreen() {
               ),
             )
           )}
+          {sending ? <TypingIndicator /> : null}
         </ScrollView>
 
         <View style={styles.composerContainer}>
           {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
-          {blockedReason ? <Text style={styles.blockedText}>{blockedReason}</Text> : null}
-          {analyzing ? (
-            <View style={styles.analyzingRow}>
-              <ActivityIndicator color={theme.colors.actionPrimary} />
-              <Text style={styles.blockedText}>Estamos generando el informe de este caso.</Text>
+          {blockedReason ? (
+            <View style={styles.blockedRow}>
+              {isAnalyzing ? (
+                <ActivityIndicator size="small" color={theme.colors.actionPrimary} />
+              ) : null}
+              <Text style={styles.blockedText}>{blockedReason}</Text>
             </View>
           ) : investigation.currentStatus === 'READY_TO_ANALYZE' ? (
-            <PrimaryButton label="Analizar ahora" onPress={() => void handleAnalyze()} />
+            <PrimaryButton
+              label="Analizar ahora"
+              onPress={() => void handleAnalyze()}
+              loading={requestingAnalysis}
+              disabled={requestingAnalysis}
+            />
           ) : null}
           <View style={styles.composerRow}>
-            <AttachmentMenu disabled={!canAttach || analyzing} onPicked={handleAttachmentPicked} />
+            <AttachmentMenu disabled={!canAttach} onPicked={handleAttachmentPicked} />
             <TextInput
               style={styles.input}
               placeholder="Escribe una respuesta..."
@@ -425,13 +513,13 @@ export default function ChatScreen() {
               onChangeText={setDraft}
               multiline
               maxLength={MAX_MESSAGE_LENGTH}
-              editable={!blockedReason && !sending && !analyzing}
+              editable={!blockedReason && !sending}
             />
             <PrimaryButton
               label="Enviar"
               onPress={() => void handleSend()}
               loading={sending}
-              disabled={!!blockedReason || analyzing}
+              disabled={!!blockedReason}
             />
           </View>
         </View>
@@ -517,7 +605,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     opacity: 0.7,
   },
-  analyzingRow: {
+  blockedRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.space8,
