@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -20,6 +21,8 @@ import {
  */
 @Injectable()
 export class SupabaseAuthService {
+  private readonly logger = new Logger(SupabaseAuthService.name);
+
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseAuthClient,
     private readonly config: ConfigService,
@@ -89,6 +92,20 @@ export class SupabaseAuthService {
   async forgotPassword(email: string): Promise<void> {
     const { error } = await this.supabase.auth.resetPasswordForEmail(email);
     if (error) {
+      // Antes se descartaba `error` sin registrarlo — el usuario solo veía
+      // el mensaje genérico del frontend y no había forma de saber si fue
+      // un límite de envío, un problema del SMTP configurado en Supabase,
+      // u otra causa, sin reproducirlo a ciegas. Mismo criterio que
+      // ClaudeAiProvider.generateReport() (Decisions Log): loguear el
+      // detalle real del proveedor antes de lanzar la excepción genérica.
+      this.logger.error(
+        'forgotPassword() falló en Supabase Auth',
+        JSON.stringify({
+          message: error.message,
+          status: error.status,
+          code: error.code,
+        }),
+      );
       throw new ServiceUnavailableException(
         'No se pudo iniciar la recuperación de contraseña',
       );
