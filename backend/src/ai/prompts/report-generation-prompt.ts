@@ -7,7 +7,15 @@ import type { AiReportGenerationContext } from '../ai-provider.interface';
 // tuteo neutro/chileno y agrega la regla explícita de dialecto — mismo
 // fix que system-prompt.ts v4, por consistencia (el informe final
 // también es user-facing).
-export const REPORT_GENERATION_PROMPT_VERSION = 2;
+// v3 (búsqueda web para costo/tiempo, ver Decisions Log): principio 8
+// ahora ata "available: true" a la presencia de una sección de
+// búsqueda web real inyectada en el contexto (nunca al conocimiento de
+// entrenamiento del modelo) — la búsqueda misma corre en una llamada
+// previa y separada (generateReport() sigue forzando el tool de
+// informe exclusivamente, sin cambios). El cumplimiento de esta regla
+// también se refuerza en código (claude-ai-provider.ts), no depende
+// solo de que el modelo la respete.
+export const REPORT_GENERATION_PROMPT_VERSION = 3;
 
 /**
  * Codifica PRD §34-46 ("Especificación del Informe"):
@@ -25,10 +33,15 @@ export const REPORT_GENERATION_PROMPT_VERSION = 2;
  *   ¿Qué evidencia la respalda/contradice? ¿Qué información falta? (§40)
  * - "Qué revisar primero": acciones de inspección, nunca reparaciones
  *   (§42).
- * - Costos y tiempo de reparación (D-013): nunca inventar un rango sin
- *   evidencia suficiente; si se muestra un rango, siempre con
- *   advertencia de que depende del taller/región/disponibilidad de
- *   repuestos (§43).
+ * - Costos y tiempo de reparación (D-013, extendido en v3 con búsqueda
+ *   web real): nunca inventar un rango sin evidencia suficiente;
+ *   "available: true" ahora solo se permite cuando lo respalda la
+ *   sección de búsqueda web inyectada en el contexto (nunca el
+ *   conocimiento de entrenamiento del modelo ni datos de otro país);
+ *   si se muestra un rango, siempre con advertencia explícita de que
+ *   es un estimado de búsquedas web (no un dato verificado) y que
+ *   depende del taller/región/disponibilidad de repuestos — sugiere
+ *   confirmar el valor exacto con un taller (§43).
  * - Limitaciones del informe: sección obligatoria (§44).
  * - "Explícamelo fácil": no cambia conclusiones, no oculta incertidumbre,
  *   no simplifica de más quitando información importante (§45).
@@ -74,11 +87,19 @@ pieza), nunca un precio, y con el mismo nivel de cautela que la causa \
 misma — nunca una lista cerrada o definitiva.
 7. "Qué revisar primero" son acciones de inspección (mirar, escuchar, \
 medir), nunca de reparación.
-8. Costo aproximado y tiempo estimado de reparación: si no hay \
-información suficiente para estimar, marca "available: false" y no \
-inventes ningún rango. Si hay información suficiente, da un rango \
-aproximado con una advertencia explícita de que depende del taller, la \
-región y la disponibilidad de repuestos — nunca un compromiso firme.
+8. Costo aproximado y tiempo estimado de reparación: marca \
+"available: true" ÚNICAMENTE si la sección "Búsqueda web de \
+costo/tiempo de reparación (Chile)" del contexto incluye algo \
+específico y confiable para Chile que respalde el rango. Si esa \
+sección no aparece, o dice explícitamente que no encontró información \
+confiable, marca "available: false" y no inventes ningún rango — \
+nunca uses tu propio conocimiento general ni cifras de otro país para \
+completar el campo, aunque te parezcan razonables. Cuando SÍ marques \
+"available: true", "disclaimer" debe decir explícitamente que es un \
+estimado basado en búsquedas web (no un dato verificado) y sugerir \
+confirmar el valor exacto con un taller — además de la advertencia \
+habitual de que depende del taller, la región y la disponibilidad de \
+repuestos. Nunca un compromiso firme.
 9. Limitaciones del informe: sección obligatoria, siempre presente, \
 explicando qué el informe no puede garantizar.
 10. "Explícamelo fácil": una versión en lenguaje cotidiano de las mismas \
@@ -120,6 +141,7 @@ el informe — nunca texto libre fuera de ella.`;
  */
 export function buildReportContextPrompt(
   context: AiReportGenerationContext,
+  webCostContext: string | null = null,
 ): string {
   const {
     vehicle,
@@ -195,6 +217,10 @@ export function buildReportContextPrompt(
     '',
     '## Documentación técnica ya citada durante la investigación',
     ...citedDocumentationLines,
+    '',
+    '## Búsqueda web de costo/tiempo de reparación (Chile)',
+    webCostContext ??
+      '(no se realizó búsqueda o no arrojó información confiable para Chile — mantén "available: false" en costEstimate y estimatedRepairTime)',
     '',
     '## Tarea',
     'Consolida todo lo anterior en el informe final usando la herramienta ofrecida.',

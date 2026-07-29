@@ -37,14 +37,19 @@ const POLL_INTERVAL_MS = 3000;
 const MAX_POLL_ATTEMPTS = 10;
 // Ventana propia para el polling del análisis — nunca reutilizar la de
 // evidencia (Claude Vision, mucho más rápido). generateReport() corre
-// con AI_REPORT_TIMEOUT_MS = 60s en el backend (más reintentos propios
-// del SDK, no cubiertos acá) — 30 intentos × 3s = 90s le da un margen
-// real de +50% sobre esos 60s (latencia de encolado del `JobsWorker`
-// incluida), en vez de apenas empatarlo. Este polling consulta
-// `GET /investigations/{id}` (no un jobId) — ver el comentario sobre
-// `ensureAnalysisPolling` más abajo para el porqué.
+// ahora con AI_REPORT_SEARCH_TIMEOUT_MS (35s, búsqueda web de
+// costo/tiempo — subido de 20s tras timeouts reales en pruebas en vivo,
+// ver Decisions Log) + AI_REPORT_TIMEOUT_MS (60s) ≈ 95s de peor caso
+// secuencial en el backend (más reintentos propios del SDK, no
+// cubiertos acá) — 50 intentos × 3s = 150s le da un margen real de
+// ~58% sobre ese peor caso (latencia de encolado del `JobsWorker`
+// incluida), conservando una holgura similar a la que tenía la
+// ventana original de 90s sobre los 60s de antes de agregar la
+// búsqueda web. Este polling consulta `GET /investigations/{id}` (no
+// un jobId) — ver el comentario sobre `ensureAnalysisPolling` más
+// abajo para el porqué.
 const REPORT_POLL_INTERVAL_MS = 3000;
-const REPORT_MAX_POLL_ATTEMPTS = 30;
+const REPORT_MAX_POLL_ATTEMPTS = 50;
 
 // Réplica exacta de MessagesService.sendMessage/EvidenceService.uploadEvidence
 // (hallazgo 5 del plan de esta fase) — WAITING_EVIDENCE bloquea mensajes

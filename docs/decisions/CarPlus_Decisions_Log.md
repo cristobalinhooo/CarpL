@@ -1447,3 +1447,188 @@ caso `hypothesisId` inexistente; los tests existentes migrados de
 `tsc` verificados.
 
 ---
+
+## D-027 — Primer despliegue real: backend en Render (plan Starter)
+
+**Fecha:** 2026-07-27
+**Estado:** Resuelto — desplegado y verificado
+
+**Contexto:** D-016 (Fase 8) dejó el backend *preparado* para desplegar
+(`backend/DEPLOYMENT.md`) pero explícitamente *sin* desplegar, como
+paso de infraestructura aparte — ver también D-007 (beta privada antes
+del lanzamiento público). Este es ese paso.
+
+**Decisión:**
+
+1. **Backend en Render, plan Starter (US$7/mes), no Free.** El plan
+   Free no ofrece Pre-Deploy Command, y las migraciones de Prisma
+   (`prisma migrate deploy`) necesitan correr como paso previo a que el
+   servicio quede activo — sin eso, cada deploy arrancaría contra un
+   esquema desactualizado o directamente roto. Starter es el plan más
+   barato de Render que sí lo ofrece.
+2. **Postgres con `pgvector` habilitado, misma plataforma (Render).**
+   Se ejecutó `CREATE EXTENSION vector;` a mano contra la External
+   Database URL (una sola vez, credencial nunca escrita a disco —
+   variable de entorno inline, borrada al terminar).
+3. **Verificado con el healthcheck real** — `GET /api/v1/health/ready`
+   responde con los tres componentes (`database`, `pgvector`,
+   `jobsWorker`) en `up`, confirmando que las migraciones corrieron, la
+   extensión está activa, y el worker in-process de `jobs` (§9.12)
+   arrancó correctamente en el entorno real de Render, no solo en
+   Docker local.
+4. **URL pública:** `https://carrum-backend.onrender.com`.
+
+**Consecuencias:** `mobile/.env` (`EXPO_PUBLIC_API_URL`) apunta ahora a
+la URL pública de Render en vez de la IP LAN local — el teléfono ya no
+necesita estar en la misma red que la compu para probar contra un
+backend real. Pendiente, fuera del alcance de esta decisión: no se
+desplegó todavía ningún frontend/build de la app móvil (D-007 sigue
+aplicando — beta privada primero), y `DATABASE_URL` en `backend/.env`
+local sigue apuntando a Postgres de Docker, sin cambios — el entorno de
+desarrollo local no se movió a la base de Render.
+
+---
+
+## D-028 — Búsqueda web real en `generateReport()` para costo/tiempo de reparación
+
+**Fecha:** 2026-07-28
+**Estado:** Resuelto — implementado, testeado y verificado
+
+**Contexto:** `costEstimate` y `estimatedRepairTime` en el informe
+final casi siempre salían `available: false`, porque el modelo no
+tenía forma de saber precios/tiempos reales y actuales para Chile —
+solo su conocimiento de entrenamiento, que el prompt (principio 8, ver
+D-013) ya le prohibía usar para inventar un rango. Se agregó el tool
+de búsqueda web nativo de Anthropic (`web_search_20260209`), **solo en
+`generateReport()`**, nunca en el chat conversacional
+(`generateResponse()`), para no sumar costo de búsqueda a cada mensaje
+— esa función corre una vez por investigación, de forma asíncrona vía
+`jobs`.
+
+**Decisión:**
+
+1. **Dos llamadas separadas a Claude, no una.** `generateReport()`
+   fuerza `tool_choice: {type: 'tool', name: 'submit_report'}` —
+   Claude no puede llamar `web_search` antes porque ese tool_choice
+   exige que la primera respuesta sea exactamente ese tool. Meter
+   `web_search` en la misma llamada habría obligado a cambiar ese
+   tool_choice a `auto` para **todo** el informe, aumentando el riesgo
+   sobre el generador completo (los otros ~8 campos, no solo
+   costo/tiempo). En vez de eso: una llamada previa y aislada
+   (`gatherWebCostContext()`), solo con `web_search`
+   (`tool_choice: auto`), que busca costo/tiempo específicos para Chile
+   usando el vehículo + hipótesis ya generadas en la conversación. Su
+   resultado se inyecta como una sección más de contexto en el prompt
+   de `generateReport()`, que queda exactamente igual que antes en su
+   mecanismo central — cero cambios al generador del resto del informe.
+   Alternativa descartada: una sola llamada con `tool_choice: auto`
+   para todo el informe — más eficiente, pero aumentaba la superficie
+   de riesgo sobre el mecanismo de salida estructurada completo.
+2. **Los dos requisitos no negociables se garantizan en código, no
+   solo en el prompt** (`enforceWebSearchGrounding()` en
+   `claude-ai-provider.ts`, corre después de validar
+   `AiReportContentDto`):
+   - Si `gatherWebCostContext()` no produjo contexto útil (falló, se
+     saltó por falta de hipótesis, o la búsqueda fue un hallazgo
+     negativo puro — detectado por ausencia de dígitos en el texto,
+     ya que costo/tiempo real siempre trae números), se **fuerza**
+     `available: false` en ambos campos sin importar qué haya
+     devuelto el modelo, con un `warn` si el modelo dijo `true` de
+     todas formas.
+   - Si terminó `available: true`, se **garantiza** (no se confía en
+     que el modelo lo redacte bien) un disclaimer fijo explicitando
+     que es un estimado de búsquedas web — no un dato verificado — y
+     sugiriendo confirmar con un taller, concatenado después de lo que
+     haya escrito el modelo.
+   - Mismo criterio que `validateSync` en el resto del archivo: nunca
+     confiar ciegamente en que la IA respetó una regla del prompt
+     cuando el código puede verificarlo y corregirlo.
+3. **Prompt** (`report-generation-prompt.ts` v3, principio 8
+   reescrito): `available: true` solo se permite si la sección
+   "Búsqueda web de costo/tiempo de reparación (Chile)" inyectada en
+   el contexto respalda el rango con algo específico para Chile —
+   nunca el conocimiento de entrenamiento del modelo ni cifras de otro
+   país. Nuevo archivo `web-cost-search-prompt.ts` (v1) para el system
+   prompt de la llamada de búsqueda, separado por ser una tarea
+   distinta con su propio versionado — mismo criterio ya establecido
+   para `system-prompt.ts`/`report-generation-prompt.ts`/etc.
+4. **`AI_REPORT_SEARCH_TIMEOUT_MS`**, timeout propio de la llamada de
+   búsqueda, separado de `AI_REPORT_TIMEOUT_MS` — mismo criterio de
+   "cada llamada su propia constante" que ya aplican
+   `AI_CONVERSATION_TIMEOUT_MS`/`AI_REPORT_TIMEOUT_MS`.
+   `gatherWebCostContext()` nunca lanza: cualquier falla se loguea
+   como `warn` y degrada a `null` — la búsqueda nunca puede tumbar la
+   generación del informe. Default inicial 20000ms, subido a
+   **35000ms** tras la verificación en vivo (punto 6) — no era un
+   valor definitivo, era una primera estimación a corregir con datos
+   reales.
+5. **Ventana de polling móvil ensanchada proactivamente**, no dejada
+   como punto abierto. El peor caso de `generateReport()` es
+   `AI_REPORT_SEARCH_TIMEOUT_MS` + `AI_REPORT_TIMEOUT_MS` (60s) — con
+   el timeout de búsqueda ya corregido a 35s (punto 6), ≈95s.
+   `REPORT_MAX_POLL_ATTEMPTS` en
+   `mobile/src/app/investigation/[id]/chat.tsx` sube de 30 a **50**
+   (mismos 3000ms de intervalo) → ventana total de 150s, ~58% de
+   margen sobre el peor caso real. Decisión explícita del usuario:
+   "ya vivimos las consecuencias de dejar el margen ajustado esta
+   misma sesión" (ver D-025 punto 5) — mejor prevenir ahora que
+   volver a diagnosticarlo la próxima vez que se pruebe en el celular.
+6. **Verificación en vivo (post-implementación), con datos reales, no
+   solo tests con mocks:**
+   - Primer intento contra una investigación real pero con contexto
+     inflado (36 hipótesis acumuladas de pruebas repetidas): la
+     búsqueda web se agotó a los 20s, y el informe principal salió
+     truncado por `max_tokens: 4096` (campo `whatToCheckFirst` en
+     adelante ausente del `tool_use.input` — la IA no alcanzó a
+     terminar el JSON). Se encontró y corrigió un bug real propio en
+     `web-cost-search-prompt.ts`: `buildWebCostSearchContext()` no
+     deduplicaba hipótesis repetidas (mismo texto, distinta confianza
+     por revisión) — ahora se queda con la confianza más alta por
+     texto único y se acota a las 5 causas más probables.
+   - El usuario pidió explícitamente no tocar `max_tokens: 4096`
+     (preexistente, fuera del alcance de esta función) hasta probar
+     con un caso liviano. Se creó una investigación nueva real (5
+     turnos de conversación genuina, sin fixtures) sobre un chillido
+     al frenar, que convergió sola a "Desgaste de pastillas de freno"
+     con confianza 0.65 y `READY_TO_ANALYZE`.
+   - Con el caso liviano, `max_tokens: 4096` **no volvió a ser
+     problema** — el informe salió completo (confirma que era el
+     contexto inflado del primer caso, no un problema general) — pero
+     la búsqueda web **volvió a agotar el timeout de 20s**, esta vez
+     ya deduplicada — confirmando que 20s era corto en general, no
+     solo por contexto inflado. Se subió a 35s (punto 4) con este dato
+     real como justificación.
+   - Con el timeout corregido, el informe se generó completo y
+     correcto: la búsqueda corrió de verdad (usó su `max_uses: 3`
+     buscando precios de pastillas de freno en Chile), no encontró
+     nada específico/confiable, y lo dijo explícitamente — el informe
+     final mantuvo `costEstimate.available: false` /
+     `estimatedRepairTime.available: false` con el disclaimer
+     correspondiente, validando en un caso real end-to-end tanto la
+     Capa 1 (prompt) como la ruta de "búsqueda corrió pero no
+     encontró nada" sin necesitar la Capa 2 (`null`) para forzarlo.
+   - Se observó una sola vez (en el intento con contexto inflado) un
+     campo `urgency` corrupto con un fragmento de sintaxis ajena
+     (`<parameter name="level">MODERATE`) en vez de un objeto anidado
+     — `validateSync` lo rechazó correctamente, el informe no se
+     generó con datos corruptos. No volvió a aparecer en el reintento
+     con el caso liviano; se documenta como anomalía observada, sin
+     acción tomada (no reprodujo, no bloquea, la validación ya lo
+     cubre).
+
+**Consecuencias:** Cada informe generado ahora hace hasta dos llamadas
+a la API de Claude en vez de una (costo adicional acotado por
+`max_uses: 3` en el tool de búsqueda), solo durante la generación del
+informe — el chat conversacional no cambia. Tests nuevos en
+`claude-ai-provider.spec.ts` cubren: búsqueda exitosa con disclaimer
+garantizado, `available: false` forzado sin hipótesis, forzado también
+ante un hallazgo negativo puro, degradación correcta ante error de la
+búsqueda, y la forma exacta de la llamada de búsqueda (tool +
+tool_choice). `user_location` orienta los resultados a Chile sin
+restringir por dominio — un allowlist de dominios podría generar falsos
+negativos que forzarían "sin resultados" de más. `max_tokens: 4096`
+en la llamada principal queda **sin tocar**, confirmado como no
+problemático en el caso liviano — si reaparece con un caso normal (no
+inflado), se trata como hallazgo aparte, no mezclado con esta función.
+
+---

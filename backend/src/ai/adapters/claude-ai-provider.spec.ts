@@ -49,6 +49,7 @@ describe('ClaudeAiProvider', () => {
         if (key === 'aiModel') return 'claude-sonnet-5';
         if (key === 'aiConversationTimeoutMs') return 30000;
         if (key === 'aiReportTimeoutMs') return 60000;
+        if (key === 'aiReportSearchTimeoutMs') return 35000;
         return undefined;
       }),
     };
@@ -372,6 +373,48 @@ describe('ClaudeAiProvider', () => {
       };
     }
 
+    /**
+     * generateReport() ahora hace DOS llamadas a `messages.create`: la
+     * previa y aislada de búsqueda web (gatherWebCostContext, tools
+     * incluye web_search_20260209) y la principal del informe (tools
+     * incluye submit_report). El mock distingue una de otra por su
+     * `tools[0].type` para poder simular ambas de forma independiente
+     * sin depender del orden de las llamadas.
+     */
+    function mockGenerateReportCalls(
+      client: FakeAnthropicClient,
+      options: {
+        reportToolInput: unknown;
+        /** texto que "encuentra" la búsqueda web; omitir = sin resultados */
+        searchText?: string;
+      },
+    ) {
+      client.messages.create.mockImplementation(
+        (params: { tools?: Array<{ type?: string }> }) => {
+          const isSearchCall = params.tools?.some(
+            (tool) => tool.type === 'web_search_20260209',
+          );
+          if (isSearchCall) {
+            return Promise.resolve({
+              content: options.searchText
+                ? [{ type: 'text', text: options.searchText }]
+                : [],
+            });
+          }
+          return Promise.resolve({
+            content: [
+              {
+                type: 'tool_use',
+                id: 't1',
+                name: 'submit_report',
+                input: options.reportToolInput,
+              },
+            ],
+          });
+        },
+      );
+    }
+
     it('llama al modelo forzando tool_choice y devuelve el informe validado', async () => {
       client.messages.create.mockResolvedValue({
         content: [
@@ -450,23 +493,18 @@ describe('ClaudeAiProvider', () => {
       ).rejects.toBeInstanceOf(ServiceUnavailableException);
     });
 
-    it('acepta costEstimate con approximateRange y disclaimer', async () => {
-      client.messages.create.mockResolvedValue({
-        content: [
-          {
-            type: 'tool_use',
-            id: 't1',
-            name: 'submit_report',
-            input: {
-              ...validReportToolInput(),
-              costEstimate: {
-                available: true,
-                approximateRange: { min: 20000, max: 40000, currency: 'CLP' },
-                disclaimer: 'Depende del taller y la región.',
-              },
-            },
+    it('acepta costEstimate con approximateRange cuando la búsqueda web encontró algo, y garantiza el disclaimer', async () => {
+      mockGenerateReportCalls(client, {
+        searchText:
+          'Encontré: pastillas de freno cuestan entre $20.000 y $40.000 CLP en talleres de Santiago.',
+        reportToolInput: {
+          ...validReportToolInput(),
+          costEstimate: {
+            available: true,
+            approximateRange: { min: 20000, max: 40000, currency: 'CLP' },
+            disclaimer: 'Depende del taller y la región.',
           },
-        ],
+        },
       });
 
       const result = await provider.generateReport(fakeReportContext());
@@ -477,6 +515,107 @@ describe('ClaudeAiProvider', () => {
         max: 40000,
         currency: 'CLP',
       });
+      // Requisito no negociable 1: el disclaimer siempre queda explícito
+      // sobre ser un estimado de búsquedas web, sin importar lo que haya
+      // escrito el modelo — se garantiza en código, no solo en el prompt.
+      expect(result.costEstimate.disclaimer).toContain(
+        'Depende del taller y la región.',
+      );
+      expect(result.costEstimate.disclaimer).toContain(
+        'estimado basado en búsquedas web',
+      );
+    });
+
+    it('fuerza available:false aunque el modelo diga true, si la búsqueda no corrió (sin hipótesis)', async () => {
+      mockGenerateReportCalls(client, {
+        reportToolInput: {
+          ...validReportToolInput(),
+          costEstimate: {
+            available: true,
+            approximateRange: { min: 20000, max: 40000, currency: 'CLP' },
+          },
+          estimatedRepairTime: {
+            available: true,
+            approximateRange: { min: 1, max: 2 },
+          },
+        },
+      });
+
+      const result = await provider.generateReport({
+        ...fakeReportContext(),
+        hypotheses: [],
+      });
+
+      expect(result.costEstimate.available).toBe(false);
+      expect(result.costEstimate.approximateRange).toBeUndefined();
+      expect(result.estimatedRepairTime.available).toBe(false);
+      expect(result.estimatedRepairTime.approximateRange).toBeUndefined();
+      // Sin hipótesis, gatherWebCostContext() se salta sin llamar a la
+      // API — solo debería haber una llamada (la del informe).
+      expect(client.messages.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('fuerza available:false aunque el modelo diga true, si la búsqueda no encontró nada confiable', async () => {
+      mockGenerateReportCalls(client, {
+        searchText: 'No encontré información confiable para Chile.',
+        reportToolInput: {
+          ...validReportToolInput(),
+          costEstimate: {
+            available: true,
+            approximateRange: { min: 20000, max: 40000, currency: 'CLP' },
+          },
+        },
+      });
+
+      const result = await provider.generateReport(fakeReportContext());
+
+      expect(result.costEstimate.available).toBe(false);
+      expect(result.costEstimate.approximateRange).toBeUndefined();
+    });
+
+    it('genera el informe igual, sin contexto de búsqueda, si la llamada de búsqueda web falla', async () => {
+      client.messages.create.mockImplementation(
+        (params: { tools?: Array<{ type?: string }> }) => {
+          const isSearchCall = params.tools?.some(
+            (tool) => tool.type === 'web_search_20260209',
+          );
+          if (isSearchCall) {
+            return Promise.reject(new Error('timeout de red simulado'));
+          }
+          return Promise.resolve({
+            content: [
+              {
+                type: 'tool_use',
+                id: 't1',
+                name: 'submit_report',
+                input: validReportToolInput(),
+              },
+            ],
+          });
+        },
+      );
+
+      const result = await provider.generateReport(fakeReportContext());
+
+      expect(result.summary).toBe(validReportToolInput().summary);
+      expect(result.costEstimate.available).toBe(false);
+    });
+
+    it('la llamada de búsqueda web usa el tool web_search con tool_choice auto, separada del tool_choice forzado del informe', async () => {
+      mockGenerateReportCalls(client, {
+        searchText: 'Encontré: $20.000 a $40.000 CLP.',
+        reportToolInput: validReportToolInput(),
+      });
+
+      await provider.generateReport(fakeReportContext());
+
+      expect(client.messages.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tools: [expect.objectContaining({ type: 'web_search_20260209' })],
+          tool_choice: { type: 'auto' },
+        }),
+        { timeout: 35000, maxRetries: 0 },
+      );
     });
   });
 });

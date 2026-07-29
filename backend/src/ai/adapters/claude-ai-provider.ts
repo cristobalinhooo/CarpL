@@ -28,6 +28,10 @@ import {
   buildReportGenerationPrompt,
 } from '../prompts/report-generation-prompt';
 import { buildSystemPrompt } from '../prompts/system-prompt';
+import {
+  buildWebCostSearchContext,
+  buildWebCostSearchPrompt,
+} from '../prompts/web-cost-search-prompt';
 
 const RESPONSE_TOOL_NAME = 'submit_investigation_response';
 
@@ -263,6 +267,31 @@ const REPORT_TOOL: Anthropic.Tool = {
   },
 };
 
+// Tool de búsqueda web nativo de Anthropic (variante con dynamic
+// filtering, soportada por AI_MODEL=claude-sonnet-5). Se usa
+// ÚNICAMENTE en gatherWebCostContext() — nunca en generateResponse()
+// ni analyzeEvidence() — para no sumar costo de búsqueda a cada turno
+// del chat (ver Decisions Log). max_uses acotado a 3 para mantener
+// costo y latencia predecibles; user_location orienta los resultados a
+// Chile sin restringir por dominio (un allowlist de dominios podría
+// generar falsos negativos que forzarían "sin resultados" de más).
+const WEB_SEARCH_TOOL: Anthropic.WebSearchTool20260209 = {
+  type: 'web_search_20260209',
+  name: 'web_search',
+  max_uses: 3,
+  user_location: { type: 'approximate', country: 'CL' },
+};
+
+// Requisito no negociable 1 (ver Decisions Log): el disclaimer debe
+// dejar explícito que el valor es un estimado de búsquedas web, no un
+// dato verificado, y sugerir confirmar con un taller. Se garantiza acá
+// en código — no se confía en que el modelo lo redacte siempre bien —
+// y se concatena después de lo que haya escrito el modelo, si algo
+// escribió.
+const WEB_SEARCH_DISCLAIMER =
+  'Este valor es un estimado basado en búsquedas web — no es un dato ' +
+  'verificado. Confirma el monto exacto con un taller antes de decidir.';
+
 // media_type soportados por la Messages API de Anthropic para imágenes.
 const SUPPORTED_IMAGE_MEDIA_TYPES = [
   'image/jpeg',
@@ -399,6 +428,120 @@ export class ClaudeAiProvider implements AiProvider {
     return instance;
   }
 
+  /**
+   * Llamada previa y aislada a generateReport() (ver Decisions Log):
+   * busca costo/tiempo de reparación reales para Chile con el tool de
+   * búsqueda web, para inyectar el resultado como contexto adicional
+   * en el prompt principal del informe — que sigue forzando su propio
+   * tool sin cambios (ver comentario de arquitectura junto a
+   * WEB_SEARCH_TOOL). Nunca lanza: cualquier falla (timeout, error del
+   * proveedor, etc.) se loguea y degrada a `null` — la búsqueda nunca
+   * puede tumbar la generación del informe.
+   */
+  private async gatherWebCostContext(
+    context: AiReportGenerationContext,
+  ): Promise<string | null> {
+    if (context.hypotheses.length === 0) {
+      // Nada que buscar — sin hipótesis no hay qué costear.
+      return null;
+    }
+
+    const model = this.config.get<string>('aiModel') ?? '';
+    const searchTimeoutMs = this.config.get<number>('aiReportSearchTimeoutMs');
+
+    try {
+      const response = await this.client.messages.create(
+        {
+          model,
+          max_tokens: 1024,
+          system: buildWebCostSearchPrompt(),
+          messages: [
+            { role: 'user', content: buildWebCostSearchContext(context) },
+          ],
+          tools: [WEB_SEARCH_TOOL],
+          tool_choice: { type: 'auto' },
+        },
+        { timeout: searchTimeoutMs, maxRetries: 0 },
+      );
+
+      const text = response.content
+        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+        .map((block) => block.text.trim())
+        .filter((textBlock) => textBlock.length > 0)
+        .join('\n\n');
+
+      // Un hallazgo negativo puro ("no encontré información confiable")
+      // nunca trae un dígito — costo y tiempo siempre se expresan con
+      // números (CLP, horas, días). Sin ningún dígito, se trata igual
+      // que "sin contexto" (null) para que la Capa 2 fuerce
+      // available:false, en vez de confiar solo en que el prompt
+      // principal (Capa 1) lo interprete bien.
+      if (text.length === 0 || !/\d/.test(text)) {
+        this.logger.log(
+          'gatherWebCostContext(): la búsqueda web corrió pero no ' +
+            'encontró nada específico/confiable para Chile',
+        );
+        return null;
+      }
+
+      this.logger.log(
+        `gatherWebCostContext(): la búsqueda web encontró contexto ` +
+          `aprovechable (${text.length} caracteres): ${text.slice(0, 300)}`,
+      );
+      return text;
+    } catch (error) {
+      this.logger.warn(
+        'gatherWebCostContext() falló — el informe se genera sin ' +
+          'contexto de búsqueda web',
+        error instanceof Error ? error.message : String(error),
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Refuerza en código (no solo en el prompt) los dos requisitos no
+   * negociables de la búsqueda web (ver Decisions Log):
+   * 1. Si no hubo contexto de búsqueda real, fuerza `available: false`
+   *    sin importar qué haya devuelto el modelo — nunca se confía
+   *    ciegamente en que el modelo respetó la regla del prompt
+   *    (mismo criterio que `validateSync` en el resto de este
+   *    archivo).
+   * 2. Si terminó `available: true`, garantiza el disclaimer de
+   *    búsqueda web — no depende de que el modelo lo haya redactado
+   *    bien.
+   */
+  private enforceWebSearchGrounding(
+    fieldName: 'costEstimate' | 'estimatedRepairTime',
+    estimate: {
+      available: boolean;
+      approximateRange?: unknown;
+      relativeLevel?: string;
+      disclaimer?: string;
+    },
+    hasWebSearchContext: boolean,
+  ): void {
+    if (!hasWebSearchContext) {
+      if (estimate.available) {
+        this.logger.warn(
+          `generateReport(): la IA marcó ${fieldName}.available=true ` +
+            'sin contexto de búsqueda web — se fuerza a false (RSIA-001)',
+        );
+      }
+      estimate.available = false;
+      estimate.approximateRange = undefined;
+      estimate.relativeLevel = undefined;
+      estimate.disclaimer = undefined;
+      return;
+    }
+
+    if (estimate.available) {
+      estimate.disclaimer = estimate.disclaimer
+        ? `${estimate.disclaimer} ${WEB_SEARCH_DISCLAIMER}`
+        : WEB_SEARCH_DISCLAIMER;
+    }
+  }
+
   async generateReport(
     context: AiReportGenerationContext,
   ): Promise<AiReportContent> {
@@ -413,13 +556,18 @@ export class ClaudeAiProvider implements AiProvider {
     // reintentar en silencio y triplicar la espera real del job.
     const reportTimeoutMs = this.config.get<number>('aiReportTimeoutMs');
 
+    const webCostContext = await this.gatherWebCostContext(context);
+
     const response = await this.client.messages.create(
       {
         model,
         max_tokens: 4096,
         system: buildReportGenerationPrompt(),
         messages: [
-          { role: 'user', content: buildReportContextPrompt(context) },
+          {
+            role: 'user',
+            content: buildReportContextPrompt(context, webCostContext),
+          },
         ],
         tools: [REPORT_TOOL],
         tool_choice: { type: 'tool', name: REPORT_TOOL_NAME },
@@ -453,6 +601,18 @@ export class ClaudeAiProvider implements AiProvider {
         'El proveedor de IA devolvió un informe con formato inesperado',
       );
     }
+
+    const hasWebSearchContext = webCostContext !== null;
+    this.enforceWebSearchGrounding(
+      'costEstimate',
+      instance.costEstimate,
+      hasWebSearchContext,
+    );
+    this.enforceWebSearchGrounding(
+      'estimatedRepairTime',
+      instance.estimatedRepairTime,
+      hasWebSearchContext,
+    );
 
     return instance;
   }

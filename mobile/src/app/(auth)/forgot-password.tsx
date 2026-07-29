@@ -93,7 +93,7 @@ export default function ForgotPasswordScreen() {
           <FormField
             label="Correo electrónico"
             icon="email"
-            placeholder="cristobal@example.com"
+            placeholder="correo@ejemplo.com"
             value={email}
             onChangeText={setEmail}
             autoCapitalize="none"

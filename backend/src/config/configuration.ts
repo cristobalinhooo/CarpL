@@ -14,6 +14,7 @@ export interface AppConfig {
   aiTimeoutMs: number;
   aiConversationTimeoutMs: number;
   aiReportTimeoutMs: number;
+  aiReportSearchTimeoutMs: number;
   ragEmbeddingProvider: string;
   ragMaxChunksPerQuery: number;
   maxUploadSize: number;
@@ -42,6 +43,10 @@ export default (): AppConfig => ({
     10,
   ),
   aiReportTimeoutMs: parseInt(process.env.AI_REPORT_TIMEOUT_MS ?? '60000', 10),
+  aiReportSearchTimeoutMs: parseInt(
+    process.env.AI_REPORT_SEARCH_TIMEOUT_MS ?? '35000',
+    10,
+  ),
   ragEmbeddingProvider: process.env.RAG_EMBEDDING_PROVIDER ?? 'null',
   ragMaxChunksPerQuery: parseInt(
     process.env.RAG_MAX_CHUNKS_PER_QUERY ?? '5',

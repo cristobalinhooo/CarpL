@@ -56,6 +56,18 @@ export const envValidationSchema = Joi.object({
   // mucho más grandes — necesita su propio timeout, más generoso, en vez
   // de heredar AI_TIMEOUT_MS.
   AI_REPORT_TIMEOUT_MS: Joi.number().integer().positive().default(60000),
+  // Llamada previa y aislada de generateReport() (Fase 7 + búsqueda web,
+  // ver Decisions Log) que busca costo/tiempo de reparación reales para
+  // Chile antes de generar el informe — timeout propio, separado de
+  // AI_REPORT_TIMEOUT_MS, porque nunca debe bloquear ni alargar el
+  // presupuesto de la llamada principal: si se agota, se degrada a "sin
+  // contexto de búsqueda" y el informe se genera igual. Default subido
+  // de 20000 a 35000: probado en vivo con un caso liviano (conversación
+  // nueva de 5 turnos, no la investigación acumulada de 36 hipótesis
+  // usada en la primera prueba) y el timeout de 20s se agotó igual
+  // ("Request timed out.") — confirma que 20s era corto en general, no
+  // solo por contexto inflado.
+  AI_REPORT_SEARCH_TIMEOUT_MS: Joi.number().integer().positive().default(35000),
 
   // Fase 5b — RAG técnico. Alcance mínimo: solo existe el adaptador nulo
   // de embeddings, así que solo "null" es un valor válido por ahora —
