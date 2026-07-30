@@ -1632,3 +1632,99 @@ problemático en el caso liviano — si reaparece con un caso normal (no
 inflado), se trata como hallazgo aparte, no mezclado con esta función.
 
 ---
+
+## D-029 — ⚠️ `Logger.error(msg, detalle)` pierde el detalle en producción real (funciona en Jest, se descarta en pino)
+
+**Fecha:** 2026-07-29
+**Estado:** Resuelto — corregido en los 3 call sites afectados, verificado
+
+**Contexto:** Investigando por qué el log real de Render para un
+`forgotPassword()` fallido no traía ningún detalle del error de
+Supabase (solo `msg`, pese al fix de logging agregado y ya desplegado
+en D-anterior), se encontró que el patrón usado —
+`this.logger.error('mensaje fijo', JSON.stringify(detalle))` — nunca
+llega a incluir `detalle` en el log real. El mismo patrón se había
+usado también en `ClaudeAiProvider.generateReport()` (validación de
+informe) y en `gatherWebCostContext()` (fallo de búsqueda web),
+agregados en esta misma sesión y dados por "verificados" porque los
+tests (Jest) sí mostraban el detalle — una falsa sensación de
+seguridad, ver más abajo.
+
+**⚠️ Advertencia para cualquier logging nuevo de acá en adelante —
+mismo criterio que la convención de dialecto en `mobile/AGENTS.md`:**
+**nunca** llames `logger.error(mensaje, datoExtra)` /
+`logger.warn(mensaje, datoExtra)` pasando el detalle como segundo
+argumento string (ni con `JSON.stringify(...)` ni con
+`error.message`/`String(error)` para errores que no sean instancias
+reales de `Error`). Si necesitas loguear un mensaje fijo junto con
+datos estructurados, **el detalle va DENTRO de un único objeto**:
+
+```ts
+// ❌ MAL — el detalle se descarta en silencio en producción
+this.logger.error('algo falló', JSON.stringify({ campo: valor }));
+
+// ✅ BIEN — el detalle sobrevive
+this.logger.error({ msg: 'algo falló', campo: valor });
+```
+
+Excepción real y ya soportada: `logger.error(mensaje, error.stack)`
+con un `error.stack` genuino (de una instancia real de `Error`) SÍ
+funciona — `nestjs-pino` detecta ese caso especial (el string calza
+con `/\n\s*at /`, patrón típico de un stack trace) y lo enruta por un
+camino distinto que sí preserva el dato (ver mecanismo abajo). El
+riesgo es específicamente pasar un string cualquiera (JSON, mensaje de
+error plano, lo que sea) que no tenga esa forma.
+
+**Mecanismo exacto (rastreado en el código fuente de las 3 capas
+involucradas, no supuesto):**
+
+1. `@nestjs/common`'s `Logger.error(msg, ...params)` — antes de
+   reenviar la llamada, le concatena el `context` de la clase
+   (`SupabaseAuthService`, etc.) como argumento final.
+2. `nestjs-pino`'s `Logger.call()` — si hay ≥1 argumento extra, toma el
+   **último** como `context` (por eso el log real sí mostraba
+   `"context":"SupabaseAuthService"` correctamente) y reenvía lo que
+   quede como argumento de formato a pino crudo:
+   `pinoLogger.error({context}, mensaje, jsonString)`.
+3. Pino formatea `mensaje` con `quick-format-unescaped`. Su código
+   fuente es categórico:
+   ```js
+   if (lastPos === -1) return f   // sin %s/%d/%j en el mensaje → lo
+                                   // devuelve tal cual, descarta TODOS
+                                   // los argumentos extra
+   ```
+   Como `'forgotPassword() falló en Supabase Auth'` no tiene ningún
+   `%`, el detalle nunca entra al objeto de log final. Sin error, sin
+   truncamiento — el campo simplemente nunca existió en lo que se
+   escribió.
+
+**Por qué los tests no lo detectaron:** Jest nunca pasa por
+`app.useLogger()`/pino — usa el `ConsoleLogger` por defecto de Nest,
+que maneja argumentos extra de forma completamente distinta (los
+imprime, no los descarta). Un test que solo verifica "no explota" o
+inspecciona la salida de consola de Jest puede parecer confirmar que
+el logging "funciona" sin que eso diga nada sobre el comportamiento
+real en producción. Verificado en vivo con un test aislado de pino
+crudo (sin Nest, sin transport) comparando ambos patrones
+lado a lado — la salida del patrón roto calza byte a byte con el log
+real capturado de Render.
+
+**Decisión:** Corregidos los 3 call sites afectados
+(`supabase-auth.service.ts#forgotPassword`,
+`claude-ai-provider.ts#generateReport` validación,
+`claude-ai-provider.ts#gatherWebCostContext` catch) al patrón de
+objeto único — mismo patrón que ya usaba correctamente
+`AuthController` para sus eventos `USER_REGISTERED`/`USER_LOGIN`/
+`USER_LOGOUT`, que nunca tuvo este problema por casualidad de estilo,
+no por haberlo diagnosticado antes.
+
+**Consecuencias:** El detalle real de `forgotPassword()` en Render
+(la pregunta original que originó este hallazgo) sigue sin
+confirmarse — recién con el próximo intento fallido, ya con el fix
+desplegado, se podrá ver la causa real en los logs. Ningún otro
+call site del backend usa el patrón roto (`jobs.worker.ts` pasa
+`error.stack` real, que cae en la excepción documentada arriba;
+`messages.service.ts` interpola todo en un solo template string, sin
+argumentos separados) — revisado explícitamente, no asumido.
+
+---

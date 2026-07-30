@@ -98,14 +98,27 @@ export class SupabaseAuthService {
       // u otra causa, sin reproducirlo a ciegas. Mismo criterio que
       // ClaudeAiProvider.generateReport() (Decisions Log): loguear el
       // detalle real del proveedor antes de lanzar la excepción genérica.
-      this.logger.error(
-        'forgotPassword() falló en Supabase Auth',
-        JSON.stringify({
+      //
+      // El detalle va DENTRO del objeto que se le pasa a `logger.error`,
+      // nunca como segundo argumento string separado: nestjs-pino, al
+      // recibir `.error(mensaje, detalleString)`, termina llamando al
+      // formateador interno de pino (`quick-format-unescaped`) con
+      // `mensaje` como format string — como `mensaje` no tiene ningún
+      // `%s`/`%j`, ese formateador DESCARTA silenciosamente cualquier
+      // argumento extra (confirmado con Render en vivo: la línea real
+      // solo traía `msg`, sin el detalle). Pasar un solo objeto con
+      // `msg` + campos propios sí sobrevive, porque nestjs-pino lo
+      // mergea directo en el registro en vez de tratarlo como format
+      // string — mismo patrón que ya usa AuthController con sus eventos
+      // `USER_REGISTERED`/`USER_LOGIN`.
+      this.logger.error({
+        msg: 'forgotPassword() falló en Supabase Auth',
+        supabaseError: {
           message: error.message,
           status: error.status,
           code: error.code,
-        }),
-      );
+        },
+      });
       throw new ServiceUnavailableException(
         'No se pudo iniciar la recuperación de contraseña',
       );

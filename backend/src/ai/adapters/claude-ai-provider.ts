@@ -490,11 +490,17 @@ export class ClaudeAiProvider implements AiProvider {
       );
       return text;
     } catch (error) {
-      this.logger.warn(
-        'gatherWebCostContext() falló — el informe se genera sin ' +
+      // El detalle va dentro del objeto (no como segundo argumento
+      // string) — nestjs-pino/pino descartan en silencio cualquier
+      // argumento extra cuando el mensaje no tiene format specifiers
+      // (`%s`/`%j`), confirmado en vivo contra Render (ver Decisions
+      // Log). Mismo fix aplicado a supabase-auth.service.ts.
+      this.logger.warn({
+        msg:
+          'gatherWebCostContext() falló — el informe se genera sin ' +
           'contexto de búsqueda web',
-        error instanceof Error ? error.message : String(error),
-      );
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }
@@ -593,10 +599,20 @@ export class ClaudeAiProvider implements AiProvider {
       // detalle completo (propiedad, restricciones violadas, y el input
       // crudo que mandó la IA) para poder diagnosticar la próxima vez
       // que pase, sin reproducirlo a ciegas.
-      this.logger.error(
-        'generateReport() devolvió un informe con formato inesperado',
-        JSON.stringify({ errors, rawInput: toolUse.input }),
-      );
+      //
+      // El detalle va dentro del objeto (no como segundo argumento
+      // string): nestjs-pino/pino descartan en silencio cualquier
+      // argumento extra cuando el mensaje no tiene format specifiers
+      // (`%s`/`%j`) — confirmado en vivo contra Render con el mismo
+      // patrón en forgotPassword() (ver Decisions Log). La versión
+      // anterior de este log NUNCA mostró el detalle en producción,
+      // pese a haberse visto "funcionar" en los tests (Jest usa el
+      // ConsoleLogger de Nest, no este pipeline de pino).
+      this.logger.error({
+        msg: 'generateReport() devolvió un informe con formato inesperado',
+        validationErrors: errors,
+        rawInput: toolUse.input,
+      });
       throw new ServiceUnavailableException(
         'El proveedor de IA devolvió un informe con formato inesperado',
       );
