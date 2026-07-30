@@ -1728,3 +1728,105 @@ call site del backend usa el patrón roto (`jobs.worker.ts` pasa
 argumentos separados) — revisado explícitamente, no asumido.
 
 ---
+
+## D-030 — Bug real: `SUPABASE_URL` mal configurado en Render enmascaraba fallas de login como "contraseña incorrecta"
+
+**Fecha:** 2026-07-29
+**Estado:** Resuelto (logging) / **Pendiente de acción del usuario** (la
+variable de entorno en Render todavía no se corrigió — fuera del
+alcance de este repositorio)
+
+**Contexto:** El fix de logging de D-029 permitió por fin ver el error
+real que Supabase devolvía en el `forgotPassword()` fallido reportado
+por el usuario: `{"message":"Invalid path specified in request
+URL","status":404}`. Comparando cómo `login()` y `forgotPassword()`
+arman la URL dentro de `SupabaseAuthService` (ambos usan el mismo
+`SupabaseClient` compartido, sin diferencia alguna en el código propio
+ni en `@supabase/auth-js` — verificado leyendo el código fuente
+instalado, no asumido) se descartaron varias hipótesis con pruebas en
+vivo contra el proyecto real de Supabase antes de llegar a la causa
+real:
+
+- Barra `/` extra al final de `SUPABASE_URL` (doble barra en la URL
+  final) → **descartado**: probado en vivo, Supabase tolera la doble
+  barra sin problema en ambos endpoints.
+- `SUPABASE_ANON_KEY` incorrecta o ausente → **descartado**: probado
+  en vivo, produce un error completamente distinto y claro (`401
+  "Invalid API key"` / `"No API key found in request"`), no el 404
+  reportado.
+
+**La causa real**, confirmada por el usuario al pegar el valor
+literal configurado en Render:
+
+```
+SUPABASE_URL = https://rudksysyfxeomfxztcuz.supabase.co/rest/v1/
+```
+
+Debería ser únicamente `https://rudksysyfxeomfxztcuz.supabase.co` —
+alguien copió la URL de la API REST de PostgREST (`/rest/v1`) en vez
+de la URL pelada del proyecto. El proyecto (`rudksysyfxeomfxztcuz`) es
+el correcto — coincide con local — el problema es exclusivamente el
+path extra. Como el código arma `${SUPABASE_URL}/auth/v1/...` para
+cada llamada de Auth, el resultado real es un path roto tipo
+`.../rest/v1//auth/v1/recover`, que termina siendo enrutado hacia
+PostgREST (no hacia GoTrue/Auth) — de ahí el código de error
+`PGRST125` (prefijo `PGRST` = PostgREST) dentro del mensaje, y el
+texto "Invalid path specified in request URL", que en realidad es el
+mensaje genérico de PostgREST para un path que no reconoce como tabla
+o recurso, no un mensaje de Auth. **Reproducido byte a byte** contra
+el proyecto real de Supabase usando el valor exacto configurado en
+Render, tanto para `/auth/v1/recover` como para
+`/auth/v1/token?grant_type=password` — ambos fallan idénticamente.
+
+**Hallazgo más grave que la pregunta original — `login()` está
+potencialmente afectado de la misma forma, y nadie podía notarlo:**
+
+```ts
+if (error || !data.session) {
+  throw new UnauthorizedException('Credenciales inválidas');
+}
+```
+
+`login()` (y `refresh()`, mismo patrón) nunca distinguen **por qué**
+falló Supabase — cualquier error, sea una contraseña genuinamente
+incorrecta o una URL rota que ni siquiera llega a GoTrue, termina en
+el mismo "Credenciales inválidas" / "Refresh token inválido o
+expirado" genérico. La verificación anterior en esta sesión de que
+"`/auth/login` funciona bien desde Render" (un intento con contraseña
+deliberadamente incorrecta que devolvió un 401 con el mensaje
+esperado) **no probaba que la llamada realmente haya llegado a
+Supabase** — con la URL rota, esa misma llamada habría fallado con un
+404 de PostgREST, y el código la habría reportado exactamente igual
+como "Credenciales inválidas". No hay forma de saber, sin el logging
+nuevo, si `login()` estuvo genuinamente funcionando todo este tiempo o
+fallando en silencio de la misma manera que `forgotPassword()`.
+
+**Decisión:**
+
+1. Se agregó a `login()` y `refresh()` el mismo logging de detalle
+   real que D-029 le dio a `forgotPassword()` — mismo patrón de objeto
+   único (`{msg, supabaseError}`), nunca string+string (D-029). Usa
+   `logger.warn` (no `error`): a diferencia de `forgotPassword()`,
+   donde cualquier falla es anómala, la mayoría de fallas de `login()`
+   son contraseñas mal tipeadas por el usuario — comportamiento
+   normal, no algo para alertar. El detalle real queda disponible de
+   todas formas para notar un patrón (ej. el mismo `status`/`code` en
+   *todos* los intentos sin importar la contraseña es la señal de una
+   falla de infraestructura, no de credenciales).
+2. **La corrección de la variable de entorno en Render queda fuera de
+   este repositorio** — es una acción manual en el dashboard de
+   Render, no algo que el código pueda arreglar. Pendiente de que el
+   usuario la corrija.
+
+**Consecuencias:** Hasta que se corrija `SUPABASE_URL` en Render,
+`login()`, `refresh()`, `register()` (que sí habría mostrado el error
+real como 400, por su manejo de errores distinto) y `logout()` (usa
+`fetch` directo a `${supabaseUrl}/auth/v1/logout`, mismo problema)
+pueden estar todos afectados en producción — no solo
+`forgotPassword()`. No se puede confirmar el alcance real sin
+volver a probar en vivo después de corregir la variable. Con el
+logging nuevo ya desplegado, el próximo intento de login/refresh
+fallido en Render mostrará el detalle real en vez de quedar
+indistinguible de una contraseña incorrecta genuina.
+
+---

@@ -56,6 +56,25 @@ export class SupabaseAuthService {
     });
 
     if (error || !data.session) {
+      // D-029/D-030: sin esto, una contraseña genuinamente incorrecta y
+      // una falla real de infraestructura (URL mal configurada, Supabase
+      // caído, etc.) son indistinguibles para quien revisa los logs —
+      // ambas terminan en el mismo "Credenciales inválidas" genérico.
+      // `warn`, no `error`: la mayoría de estos casos son contraseñas
+      // mal tipeadas por el usuario, no una falla real — pero el detalle
+      // real queda igual disponible para notar un patrón (ej. el mismo
+      // status/code repetido en todos los intentos, sin importar la
+      // contraseña, es la señal de una falla de infraestructura como la
+      // de D-030). Detalle dentro del objeto, nunca como segundo
+      // argumento string — se pierde en producción (D-029).
+      this.logger.warn({
+        msg: error
+          ? 'login() falló en Supabase Auth'
+          : 'login() no devolvió session pese a no reportar error',
+        supabaseError: error
+          ? { message: error.message, status: error.status, code: error.code }
+          : undefined,
+      });
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
@@ -131,6 +150,19 @@ export class SupabaseAuthService {
     });
 
     if (error || !data.session) {
+      // Mismo criterio que login() (D-029/D-030): un refresh token
+      // realmente vencido y una falla de infraestructura son
+      // indistinguibles sin esto — ambas devuelven el mismo mensaje
+      // genérico al cliente. Detalle dentro del objeto, nunca como
+      // segundo argumento string (D-029).
+      this.logger.warn({
+        msg: error
+          ? 'refresh() falló en Supabase Auth'
+          : 'refresh() no devolvió session pese a no reportar error',
+        supabaseError: error
+          ? { message: error.message, status: error.status, code: error.code }
+          : undefined,
+      });
       throw new UnauthorizedException('Refresh token inválido o expirado');
     }
 
