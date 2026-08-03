@@ -1830,3 +1830,114 @@ fallido en Render mostrará el detalle real en vez de quedar
 indistinguible de una contraseña incorrecta genuina.
 
 ---
+
+## D-031 — Bug real: `max_tokens: 4096` de `generateReport()` truncaba informes en un caso normal (no solo el extremo de 36 hipótesis), medido en vivo y corregido
+
+**Fecha:** 2026-07-30
+**Estado:** Resuelto
+
+**Contexto:** Un intento real de "Analizar ahora" contra Render falló
+con "El proveedor de IA devolvió un informe con formato inesperado" —
+mismo tipo de error visto antes en la verificación en vivo de D-028
+(caso sintético extremo de 36 hipótesis), pero esta vez en, según
+reportó el usuario, una conversación normal. El log de detalle
+agregado en D-029 mostró algo más grave que un campo puntual mal
+formado: `rawInput: {}` — un objeto completamente vacío, no un valor
+corrupto en un campo aislado como el `urgency` roto de la vez
+anterior.
+
+**Hipótesis descartadas con evidencia, antes de la causa real:**
+
+- **Bug en la extracción/parseo propio del código** → descartado:
+  `toolUse.input` en `generateReport()` (`claude-ai-provider.ts`) es
+  exactamente lo que devuelve la API/SDK de Anthropic para ese bloque
+  de contenido — no hay transformación propia entre la respuesta HTTP
+  y ese campo que pudiera "vaciarlo" por un bug local.
+- **Proceso reiniciado por falta de memoria en el plan Starter de
+  Render (0.5 CPU / 512MB) a mitad de la respuesta** → descartado para
+  ESTE error específico: `validateSync` solo se alcanza si
+  `messages.create()` ya devolvió una respuesta HTTP completa y
+  parseable con un bloque `tool_use`. Un OOM-kill o reinicio a mitad de
+  request se manifestaría como un error de conexión (`ECONNRESET`,
+  timeout) capturado en una rama de código distinta, nunca como una
+  respuesta válida con `input` sospechosamente vacío. Sigue siendo una
+  pregunta abierta y razonable para las dos fallas *separadas* de
+  `gatherWebCostContext()` que el usuario notó ~10 minutos aparte en el
+  mismo log (confirmado, revisando `jobs.worker.ts`, que no existe
+  reintento automático de un job — solo pueden ser dos intentos
+  distintos de "Analizar ahora", no reintentos del mismo) — pero no se
+  investigó más a fondo por falta del texto exacto de esas dos líneas.
+
+**La causa real, confirmada con documentación oficial + medición en
+vivo (no adivinada):**
+
+Según la documentación de Anthropic sobre `stop_reason`
+(`platform.claude.com/docs/en/build-with-claude/handling-stop-reasons`):
+cuando la respuesta se corta por `max_tokens` a mitad de un `tool_use`,
+el campo `input` de ese bloque puede llegar incompleto o inválido —
+`{}` es un resultado documentado y esperable si el corte ocurrió antes
+de que se pudiera parsear ningún campo, no un bug de este código.
+
+Para confirmar que esto era plausible en un caso normal (no solo el
+extremo sintético de 36 hipótesis) se escribió un script de medición
+puntual (`backend/test/ai-eval/measure-report-tokens.ts`, reusa
+`buildReportGenerationPrompt`/`buildReportContextPrompt` EXACTOS de
+producción) que llamó al modelo real 3 veces con un caso representativo
+de 6 hipótesis de entrada (activas + descartadas + parcialmente
+confirmadas), sin evidencia ni documentación citada — ni el caso
+liviano de 2 hipótesis de la verificación de D-028, ni su extremo
+sintético de 36:
+
+| Corrida | `output_tokens` |
+|---|---|
+| 1 | 5055 |
+| 2 | 5408 |
+| 3 | 5316 |
+
+Las 3 corridas superaron el límite anterior de `max_tokens: 4096` —
+confirma que la truncación **no era un caso extremo**, sino algo
+esperable en un uso normal de la función.
+
+Por qué la reproducción en vivo anterior de esta sesión (74 segundos,
+informe completo contra Render real) no mostró el problema: esa prueba
+usó una conversación corta y sintética de 4 turnos, generando muy
+pocas hipótesis — el caso "liviano" de D-028, no uno "normal". El
+informe del usuario, con una conversación real más larga, cae en el
+rango que este script sí midió.
+
+**Decisión:**
+
+1. `max_tokens` de `generateReport()` sube de 4096 a **8000**
+   (`REPORT_MAX_OUTPUT_TOKENS` en `claude-ai-provider.ts`) — ~50-58% de
+   margen sobre lo medido (5055-5408), mismo criterio de margen
+   generoso (no el mínimo justo) ya aplicado a las ventanas de polling
+   (D-025/D-028). El costo real solo depende de los tokens
+   efectivamente generados, no del techo — subir el techo no encarece
+   los informes que ya completaban bien.
+2. Se implementa la detección documentada de truncamiento: si
+   `response.stop_reason === 'max_tokens'` y el último bloque es un
+   `tool_use` (posiblemente incompleto), se loguea y rechaza con un
+   mensaje específico ("no alcanzó a completar el informe") **antes**
+   de llegar a `validateSync` — para que la próxima vez que pase (con
+   una conversación todavía más larga) el sistema lo reconozca de
+   inmediato como un truncamiento por límite de tokens, en vez de un
+   "formato inesperado" genérico que hay que re-diagnosticar desde
+   cero cada vez.
+3. El log de `validateSync` fallido (cuando SÍ es un error de formato
+   genuino, no truncamiento) ahora también incluye `stopReason` y
+   `outputTokens` — aditivo, sin riesgo, mismo criterio que D-029/D-030:
+   confirma con certeza en el próximo caso, en vez de solo teoría.
+
+**Consecuencias:** Con 8000 como techo y el mismo modelo/prompt, un
+informe necesitaría casi el doble de hipótesis/verbosidad que el caso
+"normal" medido para volver a truncarse — posible en investigaciones
+excepcionalmente largas, pero ya no en el rango que causó esta falla.
+Si vuelve a ocurrir, el nuevo log de truncamiento (`outputTokens` +
+`maxTokens`) permitirá confirmar de inmediato si el techo actual sigue
+siendo insuficiente, sin necesidad de re-medir a ciegas. Las dos fallas
+de `gatherWebCostContext()` separadas por ~10 minutos que el usuario
+notó siguen sin explicación confirmada — si vuelve a pasar, el log de
+esa función (`.warn` con `error: error.message`) ya captura el detalle
+necesario para distinguir un timeout de una caída de conexión.
+
+---

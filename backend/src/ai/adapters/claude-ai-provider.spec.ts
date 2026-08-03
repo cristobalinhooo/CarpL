@@ -453,6 +453,27 @@ describe('ClaudeAiProvider', () => {
       ).rejects.toBeInstanceOf(ServiceUnavailableException);
     });
 
+    it('detecta un truncamiento por max_tokens (stop_reason + tool_use incompleto) y rechaza con mensaje específico, no el genérico de formato inesperado', async () => {
+      client.messages.create.mockResolvedValue({
+        stop_reason: 'max_tokens',
+        usage: { output_tokens: 8000 },
+        content: [
+          {
+            type: 'tool_use',
+            id: 't1',
+            name: 'submit_report',
+            // Caso real observado: el tool call se cortó tan temprano
+            // que ni un campo alcanzó a parsearse.
+            input: {},
+          },
+        ],
+      });
+
+      await expect(
+        provider.generateReport(fakeReportContext()),
+      ).rejects.toThrow('no alcanzó a completar el informe');
+    });
+
     it('rechaza con ServiceUnavailableException si urgency.level es inválido', async () => {
       client.messages.create.mockResolvedValue({
         content: [

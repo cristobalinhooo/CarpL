@@ -114,6 +114,17 @@ const EVIDENCE_ANALYSIS_TOOL: Anthropic.Tool = {
 
 const REPORT_TOOL_NAME = 'submit_report';
 
+// Medido en vivo (test/ai-eval/measure-report-tokens.ts, ver Decisions
+// Log), no adivinado: un informe "normal" (6 hipótesis de entrada, 5 de
+// salida — ni el caso liviano de 2 ni el extremo sintético de 36 usado
+// en la verificación anterior), sin evidencia ni documentación citada,
+// consumió 5055/5408/5316 output tokens en 3 corridas reales contra el
+// modelo — ya por encima del límite anterior de 4096, lo que confirma
+// que la truncación no era un caso extremo sino algo que podía pasar en
+// un uso normal. 8000 da ~50-58% de margen sobre lo observado (mismo
+// criterio de margen generoso que las ventanas de polling, D-025/D-028).
+const REPORT_MAX_OUTPUT_TOKENS = 8000;
+
 const COST_RANGE_SCHEMA = {
   type: 'object',
   properties: {
@@ -567,7 +578,7 @@ export class ClaudeAiProvider implements AiProvider {
     const response = await this.client.messages.create(
       {
         model,
-        max_tokens: 4096,
+        max_tokens: REPORT_MAX_OUTPUT_TOKENS,
         system: buildReportGenerationPrompt(),
         messages: [
           {
@@ -580,6 +591,32 @@ export class ClaudeAiProvider implements AiProvider {
       },
       { timeout: reportTimeoutMs, maxRetries: 0 },
     );
+
+    // Detección documentada por Anthropic (platform.claude.com/docs/en/
+    // build-with-claude/handling-stop-reasons): si `stop_reason` es
+    // `max_tokens` y el último bloque es un `tool_use`, la llamada se
+    // cortó a mitad del tool call — su `input` puede venir incompleto o
+    // vacío (`{}`), sin que eso sea un bug de extracción propio. Se
+    // distingue de un "formato inesperado" genérico para que la próxima
+    // vez se sepa la causa exacta sin tener que re-diagnosticar desde
+    // cero (hallazgo real: un caso de 6 hipótesis en producción llegó a
+    // rawInput: {} — ver Decisions Log).
+    const lastBlock = response.content[response.content.length - 1] as
+      Anthropic.ContentBlock | undefined;
+    if (
+      response.stop_reason === 'max_tokens' &&
+      lastBlock?.type === 'tool_use'
+    ) {
+      this.logger.error({
+        msg: 'generateReport() se truncó por límite de tokens (max_tokens) a mitad del tool call',
+        maxTokens: REPORT_MAX_OUTPUT_TOKENS,
+        outputTokens: response.usage?.output_tokens,
+        hypothesesCount: context.hypotheses.length,
+      });
+      throw new ServiceUnavailableException(
+        'El proveedor de IA no alcanzó a completar el informe — intenta de nuevo',
+      );
+    }
 
     const toolUse = response.content.find(
       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
@@ -598,7 +635,11 @@ export class ClaudeAiProvider implements AiProvider {
       // de saber qué campo específico rechazó la IA. Se loguea el
       // detalle completo (propiedad, restricciones violadas, y el input
       // crudo que mandó la IA) para poder diagnosticar la próxima vez
-      // que pase, sin reproducirlo a ciegas.
+      // que pase, sin reproducirlo a ciegas. `stopReason`/`outputTokens`
+      // se agregan para distinguir a futuro, con certeza y no solo
+      // teoría, un truncamiento por max_tokens (ver el chequeo de arriba
+      // — este bloque solo se alcanza cuando NO fue eso) de un error de
+      // formato genuino del modelo.
       //
       // El detalle va dentro del objeto (no como segundo argumento
       // string): nestjs-pino/pino descartan en silencio cualquier
@@ -612,6 +653,8 @@ export class ClaudeAiProvider implements AiProvider {
         msg: 'generateReport() devolvió un informe con formato inesperado',
         validationErrors: errors,
         rawInput: toolUse.input,
+        stopReason: response.stop_reason,
+        outputTokens: response.usage?.output_tokens,
       });
       throw new ServiceUnavailableException(
         'El proveedor de IA devolvió un informe con formato inesperado',
