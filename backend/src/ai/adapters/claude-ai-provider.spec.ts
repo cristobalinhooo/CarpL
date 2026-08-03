@@ -474,6 +474,86 @@ describe('ClaudeAiProvider', () => {
       ).rejects.toThrow('no alcanzó a completar el informe');
     });
 
+    it('reintenta una vez cuando detecta el patrón de corrupción conocido (sintaxis de tool-call legada filtrada) y logra éxito en el segundo intento', async () => {
+      let reportCallCount = 0;
+      client.messages.create.mockImplementation(
+        (params: { tools?: Array<{ type?: string }> }) => {
+          const isSearchCall = params.tools?.some(
+            (tool) => tool.type === 'web_search_20260209',
+          );
+          if (isSearchCall) {
+            return Promise.resolve({ content: [] });
+          }
+          reportCallCount++;
+          if (reportCallCount === 1) {
+            // Caso real observado: `urgency` (un objeto) llega como un
+            // string con un fragmento de sintaxis de tool-call legada.
+            return Promise.resolve({
+              content: [
+                {
+                  type: 'tool_use',
+                  id: 't1',
+                  name: 'submit_report',
+                  input: {
+                    ...validReportToolInput(),
+                    urgency: '\n<parameter name="level">HIGH',
+                  },
+                },
+              ],
+            });
+          }
+          return Promise.resolve({
+            content: [
+              {
+                type: 'tool_use',
+                id: 't2',
+                name: 'submit_report',
+                input: validReportToolInput(),
+              },
+            ],
+          });
+        },
+      );
+
+      const result = await provider.generateReport(fakeReportContext());
+
+      expect(reportCallCount).toBe(2);
+      expect(result.summary).toBe(validReportToolInput().summary);
+    });
+
+    it('se rinde con ServiceUnavailableException si la corrupción conocida persiste tras el reintento único (nunca reintenta una segunda vez)', async () => {
+      let reportCallCount = 0;
+      client.messages.create.mockImplementation(
+        (params: { tools?: Array<{ type?: string }> }) => {
+          const isSearchCall = params.tools?.some(
+            (tool) => tool.type === 'web_search_20260209',
+          );
+          if (isSearchCall) {
+            return Promise.resolve({ content: [] });
+          }
+          reportCallCount++;
+          return Promise.resolve({
+            content: [
+              {
+                type: 'tool_use',
+                id: 't1',
+                name: 'submit_report',
+                input: {
+                  ...validReportToolInput(),
+                  urgency: '\n<parameter name="level">HIGH',
+                },
+              },
+            ],
+          });
+        },
+      );
+
+      await expect(
+        provider.generateReport(fakeReportContext()),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(reportCallCount).toBe(2);
+    });
+
     it('rechaza con ServiceUnavailableException si urgency.level es inválido', async () => {
       client.messages.create.mockResolvedValue({
         content: [

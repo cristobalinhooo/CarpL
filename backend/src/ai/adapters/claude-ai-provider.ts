@@ -125,6 +125,25 @@ const REPORT_TOOL_NAME = 'submit_report';
 // criterio de margen generoso que las ventanas de polling, D-025/D-028).
 const REPORT_MAX_OUTPUT_TOKENS = 8000;
 
+// Bug de decodificación documentado (anthropics/claude-code#49747,
+// #60584, ver Decisions Log — extensión de D-031): a veces Claude
+// filtra sintaxis de tool-call legada (formato XML previo al tool_use
+// nativo) dentro del JSON de un tool call moderno, corrompiendo un
+// campo puntual con un fragmento como `<parameter name="level">HIGH`.
+// No es un problema de prompt (confirmado externamente: instrucciones
+// explícitas contra XML no lo evitan, es un problema del decodificador)
+// — la única mitigación práctica es reintentar una vez.
+const LEGACY_TOOL_XML_PATTERN = '<parameter name=';
+
+/**
+ * Error interno (nunca cruza el límite de este archivo) para señalar
+ * al primer intento de `generateReport()` que la falla de validación
+ * coincide con el patrón de corrupción conocido y amerita un reintento
+ * único — cualquier otra falla de validación (o una segunda corrupción
+ * en el reintento) se rinde con el `ServiceUnavailableException` normal.
+ */
+class ReportCorruptionDetectedError extends Error {}
+
 const COST_RANGE_SCHEMA = {
   type: 'object',
   properties: {
@@ -151,18 +170,16 @@ const REPORT_TOOL: Anthropic.Tool = {
     type: 'object',
     properties: {
       summary: { type: 'string' },
-      urgency: {
-        type: 'object',
-        properties: {
-          level: {
-            type: 'string',
-            enum: ['LOW', 'MODERATE', 'HIGH', 'CRITICAL'],
-          },
-          explanation: { type: 'string' },
-          safetyWarning: { type: ['string', 'null'] },
-        },
-        required: ['level', 'explanation'],
-      },
+      // `urgency` va DESPUÉS de `hypotheses` a propósito (ver Decisions
+      // Log, extensión de D-031): es el primer campo de tipo `object` del
+      // tool — justo después de `summary`, siempre un párrafo largo — y
+      // es el único campo que se corrompió con sintaxis de tool-call
+      // legada filtrada (`<parameter name="...">`, bug de decodificación
+      // documentado en anthropics/claude-code#49747) en 2 corridas reales
+      // de esta sesión. `hypotheses`, un array de objetos bastante más
+      // complejo, nunca se corrompió — moverlo antes de `urgency` evita
+      // que el modelo tenga que abrir su primer objeto anidado justo
+      // después de la transición de mayor riesgo (texto largo -> objeto).
       hypotheses: {
         type: 'array',
         items: {
@@ -205,6 +222,18 @@ const REPORT_TOOL: Anthropic.Tool = {
             'likelyPartsInvolved',
           ],
         },
+      },
+      urgency: {
+        type: 'object',
+        properties: {
+          level: {
+            type: 'string',
+            enum: ['LOW', 'MODERATE', 'HIGH', 'CRITICAL'],
+          },
+          explanation: { type: 'string' },
+          safetyWarning: { type: ['string', 'null'] },
+        },
+        required: ['level', 'explanation'],
       },
       symptoms: { type: 'array', items: { type: 'string' } },
       whatToCheckFirst: { type: 'array', items: { type: 'string' } },
@@ -264,8 +293,8 @@ const REPORT_TOOL: Anthropic.Tool = {
     },
     required: [
       'summary',
-      'urgency',
       'hypotheses',
+      'urgency',
       'symptoms',
       'whatToCheckFirst',
       'costEstimate',
@@ -559,22 +588,24 @@ export class ClaudeAiProvider implements AiProvider {
     }
   }
 
-  async generateReport(
+  /**
+   * Un solo intento de llamar al modelo y validar su respuesta —
+   * extraído de `generateReport()` para poder reintentarlo exactamente
+   * una vez (ver Decisions Log, extensión de D-031) cuando la falla de
+   * validación coincide con el patrón de corrupción conocido
+   * (`LEGACY_TOOL_XML_PATTERN`). En ese caso específico lanza
+   * `ReportCorruptionDetectedError` en vez del `ServiceUnavailableException`
+   * final — cualquier otra falla (truncamiento, sin tool_use, o un
+   * error de formato que NO coincide con el patrón conocido) se rinde
+   * de inmediato, sin reintento, igual que antes.
+   */
+  private async attemptGenerateReport(
     context: AiReportGenerationContext,
-  ): Promise<AiReportContent> {
-    const model = this.config.get<string>('aiModel') ?? '';
-    // Timeout propio, más generoso que AI_TIMEOUT_MS (§11.8 solo fija un
-    // objetivo de ≤15s para la primera respuesta del chat, en vivo frente
-    // al usuario) — generateReport() corre asíncrono vía `jobs`, sin esa
-    // misma presión de tiempo real, y su contexto/salida son mucho más
-    // grandes. maxRetries: 0 por el mismo motivo que D-021 se lo dio a
-    // generateResponse(): mejor fallar rápido y claro (el frontend ya
-    // tiene su propia ventana de polling con margen — D-025/D-026) que
-    // reintentar en silencio y triplicar la espera real del job.
-    const reportTimeoutMs = this.config.get<number>('aiReportTimeoutMs');
-
-    const webCostContext = await this.gatherWebCostContext(context);
-
+    webCostContext: string | null,
+    model: string,
+    reportTimeoutMs: number | undefined,
+    attempt: 1 | 2,
+  ): Promise<AiReportContentDto> {
     const response = await this.client.messages.create(
       {
         model,
@@ -600,7 +631,9 @@ export class ClaudeAiProvider implements AiProvider {
     // distingue de un "formato inesperado" genérico para que la próxima
     // vez se sepa la causa exacta sin tener que re-diagnosticar desde
     // cero (hallazgo real: un caso de 6 hipótesis en producción llegó a
-    // rawInput: {} — ver Decisions Log).
+    // rawInput: {} — ver Decisions Log). Nunca se reintenta: un
+    // truncamiento con 8000 tokens de techo indica un caso genuinamente
+    // grande, no el glitch puntual que sí amerita reintento más abajo.
     const lastBlock = response.content[response.content.length - 1] as
       Anthropic.ContentBlock | undefined;
     if (
@@ -631,6 +664,26 @@ export class ClaudeAiProvider implements AiProvider {
     const instance = plainToInstance(AiReportContentDto, toolUse.input);
     const errors = validateSync(instance, { whitelist: true });
     if (errors.length > 0) {
+      // Bug de decodificación conocido (ver LEGACY_TOOL_XML_PATTERN):
+      // se busca el fragmento de sintaxis XML legada en el input crudo
+      // completo (no solo en el valor de una propiedad puntual) porque
+      // la corrupción reemplaza el valor esperado por un string con ese
+      // fragmento — buscar en el input serializado completo lo detecta
+      // sin importar en qué campo haya aparecido.
+      const rawInputText = JSON.stringify(toolUse.input);
+      const matchesKnownCorruption = rawInputText.includes(
+        LEGACY_TOOL_XML_PATTERN,
+      );
+
+      if (matchesKnownCorruption && attempt === 1) {
+        this.logger.warn({
+          msg: 'generateReport() detectó el patrón de corrupción conocido (sintaxis de tool-call legada filtrada) — reintentando una vez',
+          validationErrors: errors,
+          outputTokens: response.usage?.output_tokens,
+        });
+        throw new ReportCorruptionDetectedError();
+      }
+
       // Antes se descartaba `errors` sin registrarlo — quedaba sin forma
       // de saber qué campo específico rechazó la IA. Se loguea el
       // detalle completo (propiedad, restricciones violadas, y el input
@@ -639,7 +692,10 @@ export class ClaudeAiProvider implements AiProvider {
       // se agregan para distinguir a futuro, con certeza y no solo
       // teoría, un truncamiento por max_tokens (ver el chequeo de arriba
       // — este bloque solo se alcanza cuando NO fue eso) de un error de
-      // formato genuino del modelo.
+      // formato genuino del modelo. `matchesKnownCorruption`/`retried`
+      // dejan claro si esto es una segunda corrupción que sobrevivió al
+      // reintento, o un error de formato distinto que nunca coincidió
+      // con el patrón conocido.
       //
       // El detalle va dentro del objeto (no como segundo argumento
       // string): nestjs-pino/pino descartan en silencio cualquier
@@ -655,9 +711,56 @@ export class ClaudeAiProvider implements AiProvider {
         rawInput: toolUse.input,
         stopReason: response.stop_reason,
         outputTokens: response.usage?.output_tokens,
+        matchesKnownCorruption,
+        retried: attempt === 2,
       });
       throw new ServiceUnavailableException(
         'El proveedor de IA devolvió un informe con formato inesperado',
+      );
+    }
+
+    return instance;
+  }
+
+  async generateReport(
+    context: AiReportGenerationContext,
+  ): Promise<AiReportContent> {
+    const model = this.config.get<string>('aiModel') ?? '';
+    // Timeout propio, más generoso que AI_TIMEOUT_MS (§11.8 solo fija un
+    // objetivo de ≤15s para la primera respuesta del chat, en vivo frente
+    // al usuario) — generateReport() corre asíncrono vía `jobs`, sin esa
+    // misma presión de tiempo real, y su contexto/salida son mucho más
+    // grandes. maxRetries: 0 por el mismo motivo que D-021 se lo dio a
+    // generateResponse(): mejor fallar rápido y claro (el frontend ya
+    // tiene su propia ventana de polling con margen — D-025/D-026) que
+    // reintentar en silencio y triplicar la espera real del job. El
+    // reintento único de `attemptGenerateReport()` (ver Decisions Log)
+    // es una excepción deliberada y acotada a un patrón de corrupción
+    // específico y conocido — no un reintento genérico de cualquier
+    // falla.
+    const reportTimeoutMs = this.config.get<number>('aiReportTimeoutMs');
+
+    const webCostContext = await this.gatherWebCostContext(context);
+
+    let instance: AiReportContentDto;
+    try {
+      instance = await this.attemptGenerateReport(
+        context,
+        webCostContext,
+        model,
+        reportTimeoutMs,
+        1,
+      );
+    } catch (error) {
+      if (!(error instanceof ReportCorruptionDetectedError)) {
+        throw error;
+      }
+      instance = await this.attemptGenerateReport(
+        context,
+        webCostContext,
+        model,
+        reportTimeoutMs,
+        2,
       );
     }
 

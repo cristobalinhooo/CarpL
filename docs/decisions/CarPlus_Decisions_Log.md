@@ -1940,4 +1940,96 @@ notó siguen sin explicación confirmada — si vuelve a pasar, el log de
 esa función (`.warn` con `error: error.message`) ya captura el detalle
 necesario para distinguir un timeout de una caída de conexión.
 
+**Extensión — verificación en vivo del fix, y un segundo bug real,
+distinto, encontrado en el proceso (2026-07-30/31):**
+
+Antes de comitear, se corrió una reproducción completa en vivo contra
+el backend LOCAL (con el fix ya aplicado — Render todavía no tenía este
+código) usando una conversación real de varios turnos, dejando que la
+IA generara sus propias hipótesis (nunca inyectadas a mano). Resultado
+de 2 corridas hasta "Analizar ahora":
+
+- **Corrida 1: falló** — pero el nuevo logging probó que NO fue
+  truncamiento (`stopReason: "tool_use"`, `outputTokens: 5744`, bajo el
+  nuevo techo de 8000). `validateSync` rechazó el informe porque
+  `urgency` llegó como el string `"\n<parameter name=\"level\">HIGH"`
+  en vez de un objeto — la misma corrupción de "urgency" vista en el
+  caso extremo sintético de D-028, ahora reproducida en una
+  conversación real y normal.
+- **Corrida 2: exitosa** — informe completo, sin truncar, sin corromper.
+
+Esto confirma que el fix de `max_tokens`/detección de truncamiento
+funciona (la corrida 1 lo prueba: generó 5744 tokens limpios bajo el
+techo, y el código de detección de truncamiento correctamente no se
+activó), pero expuso un **segundo bug real, independiente**, ya visto
+dos veces en la sesión (el caso extremo de D-028, y esta corrida en
+vivo) en investigaciones de tamaño distinto — no relacionado con el
+largo de la salida.
+
+**Diagnóstico del bug de `urgency` corrompido** (investigado con
+evidencia externa antes de proponer cualquier arreglo, no a ciegas):
+
+- **No es un problema del prompt.** Según
+  [anthropics/claude-code#49747](https://github.com/anthropics/claude-code/issues/49747)
+  (bug idéntico: Claude mezcla sintaxis XML de tool-calling legada
+  dentro de un tool call JSON moderno), instrucciones explícitas en el
+  prompt contra XML NO evitan el problema para quien lo reportó — es un
+  cambio de formato a nivel del decodificador del modelo, no algo que
+  el texto del prompt controle. `report-generation-prompt.ts` no
+  necesita cambios por esto.
+- **`urgency` sí tiene algo estructural que lo hace más propenso**: es
+  el primer campo de tipo `object` del tool, ubicado justo después de
+  `summary` — un párrafo siempre largo. El patrón documentado en
+  #49747 ("argumentos de largo párrafo casi siempre disparan el
+  glitch") coincide con esta transición exacta: pasar de cerrar un
+  string largo a abrir el primer objeto anidado. En ambas corrupciones
+  de esta sesión, `hypotheses` — un array de objetos bastante más
+  complejo, generado inmediatamente después — salió intacto, como si
+  el modelo se "estabilizara" después de superar esa primera
+  transición riesgosa.
+- **Honestidad sobre la muestra**: son solo 2 ocurrencias dentro de
+  esta sesión (el caso sintético de 36 hipótesis de D-028, y esta
+  corrida real de 6). Es una correlación fuerte con el mecanismo
+  documentado externamente, no una certeza estadística de que
+  `urgency` sea *siempre* el campo afectado. Y #49747 se reportó contra
+  Opus 4.7 dentro de Claude Code/MCP, no contra `claude-sonnet-5` vía
+  la Messages API directa — mismo tipo de bug documentado (mezcla
+  XML/JSON a nivel de decodificador en tool calls), no una confirmación
+  exacta para este modelo/superficie.
+
+**Decisión adicional:**
+
+4. Se reordena `REPORT_TOOL.input_schema`: `hypotheses` pasa a ir
+   inmediatamente después de `summary`, y `urgency` después de
+   `hypotheses` — para que el primer objeto anidado que el modelo debe
+   abrir tras el párrafo largo de `summary` sea el array de hipótesis
+   (que nunca se corrompió), no `urgency`. No cambia nada semántico del
+   contrato — mismo `required`, mismos campos, solo el orden.
+5. Se agrega un reintento automático **acotado a una sola vez**
+   (`attemptGenerateReport()` + `ReportCorruptionDetectedError`,
+   `claude-ai-provider.ts`), disparado ÚNICAMENTE cuando `validateSync`
+   falla Y el `input` crudo completo contiene el patrón de corrupción
+   conocido (`LEGACY_TOOL_XML_PATTERN = '<parameter name='`) — mismo
+   criterio de detección por patrón ya usado para el truncamiento, no
+   un reintento genérico de cualquier falla. Si el reintento también
+   falla (con o sin el mismo patrón), se rinde con el
+   `ServiceUnavailableException` normal — nunca un loop. El log de
+   falla final ahora incluye `matchesKnownCorruption` y `retried` para
+   distinguir a futuro "corrupción conocida que sobrevivió al
+   reintento" de "un error de formato distinto que nunca coincidió con
+   el patrón". El reintento reusa el mismo `webCostContext` ya obtenido
+   — no repite la llamada de búsqueda web.
+
+**Consecuencias:** El reordenamiento del schema es una mitigación
+razonada mas no garantizada — no hay forma de probar que elimina el
+bug por completo dado que es un problema del decodificador del modelo,
+no de este código; el reintento acotado es la red de seguridad real.
+Con ambos cambios, el peor caso pasa de "falla visible al usuario en
+el primer glitch" a "una llamada extra a Claude, silenciosa, solo
+cuando el patrón conocido aparece" — costo adicional acotado a como
+máximo 1 llamada extra por informe, nunca más. Si el bug reaparece en
+un campo distinto de `urgency` (no probado todavía), la detección por
+patrón en el `input` completo lo cubre igual, sin depender de saber de
+antemano qué campo se corrompió.
+
 ---
